@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches: [ main ]
+  pull_request:
 
 # Prevent concurrent runs from fighting over the cache and the runner pool.
 concurrency:
@@ -11,8 +12,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  # Bump this to port-verify against a newer mainline tag.
   KERNEL_REF: v7.2
-  PATCH: rknpu-7.2.patch
   CCACHE_DIR: ${{ github.workspace }}/.ccache
   CCACHE_MAXSIZE: 5G
   BUILD_JOBS: 8
@@ -22,21 +23,19 @@ jobs:
     runs-on: blacksmith-8vcpu-ubuntu-2404-arm
     timeout-minutes: 360
     steps:
-      - name: Checkout RKNPU patch
+      - name: Checkout this repo (driver/, nix/, linux-integration/)
         uses: useblacksmith/checkout@v1
         with:
-          path: patchsrc
+          path: rknpu
 
-      # Cache the pristine v7.2 checkout keyed on the kernel ref only, so it
-      # is shared by every run regardless of patch changes.
       - name: Restore kernel source
         id: src
         uses: actions/cache/restore@v4
         with:
           path: linux
-          key: linux-${{ env.KERNEL_REF }}-src-v1
+          key: linux-${{ env.KERNEL_REF }}-src-v2
 
-      - name: Checkout Linux ${{ env.KERNEL_REF }}
+      - name: Checkout Linux ${{ env.KERNEL_REF }} (pristine)
         if: steps.src.outputs.cache-hit != 'true'
         uses: useblacksmith/checkout@v1
         with:
@@ -50,86 +49,79 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: linux
-          key: linux-${{ env.KERNEL_REF }}-src-v1
+          key: linux-${{ env.KERNEL_REF }}-src-v2
 
       - name: Install build dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq build-essential flex bison libssl-dev libelf-dev bc dwarves python3 gzip xz-utils device-tree-compiler ccache
 
-      # Restore the compiler cache; restore-keys let a run reuse the most
-      # recent cache even when the exact key misses.
       - name: Restore ccache
         id: cc
         uses: actions/cache/restore@v4
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ env.KERNEL_REF }}-${{ hashFiles('patchsrc/rknpu-7.2.patch') }}
+          key: ccache-${{ env.KERNEL_REF }}-${{ hashFiles('rknpu/driver/**') }}
           restore-keys: |
             ccache-${{ env.KERNEL_REF }}-
 
-      - name: Apply RKNPU port patch
+      # Pure out-of-tree build against a pristine kernel: no patching.
+      # modules (not just vmlinux) so Module.symvers exists for the
+      # external module link.
+      - name: Build pristine kernel modules
         run: |
           cd linux
-          git checkout -- .
-          git clean -fdq -e '*.o' -e '*.a' -e '.config' -e 'include/config' 2>/dev/null || true
-          if git apply --check ../patchsrc/${{ env.PATCH }} 2>/dev/null; then
-            git apply --verbose ../patchsrc/${{ env.PATCH }}
-            echo "patch applied"
-          else
-            echo "patch already applied"
-          fi
-          git status --short | head -20
+          make ARCH=arm64 O=build defconfig
+          make ARCH=arm64 O=build CC="ccache gcc" -j"${{ env.BUILD_JOBS }}" modules
+          ls -la build/Module.symvers
 
-      - name: Configure kernel (arm64 + RKNPU)
+      - name: Build rknpu module (out-of-tree)
         run: |
           cd linux
-          make ARCH=arm64 defconfig
-          ./scripts/config --file .config --module ROCKCHIP_RKNPU
-          ./scripts/config --file .config --enable ROCKCHIP_RKNPU_DRM_GEM
-          ./scripts/config --file .config --enable ROCKCHIP_RKNPU_FENCE
-          ./scripts/config --file .config --enable ROCKCHIP_RKNPU_DEBUG_FS
-          make ARCH=arm64 olddefconfig
-          echo "=== relevant config ==="
-          grep -E 'ROCKCHIP_RKNPU|ARCH_ROCKCHIP' .config
+          make ARCH=arm64 O=build CC="ccache gcc" -j"${{ env.BUILD_JOBS }}" M="${{ github.workspace }}/rknpu/driver" modules
+          ls -la "${{ github.workspace }}/rknpu/driver/rknpu.ko"
 
-      # rknpu.ko only links once vmlinux.symvers exists, so build the kernel
-      # first, then the modules. ccache makes both incremental.
-      - name: Build vmlinux
+      - name: Verify rknpu.ko
         run: |
-          cd linux
-          make ARCH=arm64 CC="ccache gcc" -j"${{ env.BUILD_JOBS }}" vmlinux
-          ls -la vmlinux vmlinux.symvers
-
-      - name: Build modules (links rknpu.ko)
-        run: |
-          cd linux
-          make ARCH=arm64 CC="ccache gcc" -j"${{ env.BUILD_JOBS }}" modules
-          ls -la drivers/rknpu/rknpu.ko
-
-      - name: Build RK3588 DTB
-        run: |
-          cd linux
-          make ARCH=arm64 -j"${{ env.BUILD_JOBS }}" dtbs
-          ls -la arch/arm64/boot/dts/rockchip/rk3588-evb1-v10.dtb
-
-      - name: Verify rknpu.ko and DTB
-        run: |
-          cd linux
+          cd rknpu/driver
           echo "=== modinfo ==="
-          modinfo drivers/rknpu/rknpu.ko | head -30
+          modinfo rknpu.ko | head -30
           echo "=== vermagic ==="
-          modinfo -F vermagic drivers/rknpu/rknpu.ko
-          echo "=== vendor node in compiled DTB ==="
-          dtc -I dtb -O dts arch/arm64/boot/dts/rockchip/rk3588-evb1-v10.dtb 2>/dev/null \
-            | grep -B2 -A6 'rk3588-rknpu' | head -30
+          modinfo -F vermagic rknpu.ko
+          echo "=== undefined symbols: $(nm rknpu.ko | grep -c ' U ') ==="
+
+      # Apply the NixOS overlay to a pristine mainline DTB: proves the
+      # overlay disables the rocket cores, enables the IOMMUs and
+      # creates the vendor node, against unmodified upstream DTs.
+      - name: Check device tree overlay
+        run: |
+          DTC=$(find /usr -name dtc -type f | head -1)
+          FDTOVERLAY=$(find /usr -name fdtoverlay -type f | head -1)
+          INC="${{ github.workspace }}/linux/scripts/dtc/include-prefixes"
+          cd linux
+          gcc -E -nostdinc -I"$INC" -undef -D__DTS__ -x assembler-with-cpp \
+            "${{ github.workspace }}/rknpu/nix/overlay.dts" -o /tmp/overlay-pp.dts
+          $DTC -@ -I dts -O dtb -o /tmp/rknpu.dtbo /tmp/overlay-pp.dts
+          BASE=arch/arm64/boot/dts/rockchip/rk3588-friendlyelec-cm3588-nas.dtb
+          $FDTOVERLAY -i "$BASE" -o /tmp/board-applied.dtb /tmp/rknpu.dtbo
+          $DTC -I dtb -O dts /tmp/board-applied.dtb -o /tmp/board-applied.dts
+          echo "=== vendor node status ==="
+          grep -A3 'rknpu@fdab0000 {' /tmp/board-applied.dts | head -4
+          echo "=== rocket cores disabled? ==="
+          for c in rknn_core_0 rknn_core_1 rknn_core_2; do
+            grep -A18 "$c: npu@" /tmp/board-applied.dts | grep -m1 status
+          done
+          echo "=== iommus enabled? ==="
+          for m in fdab9000 fdaca000 fdada000; do
+            grep -A12 "iommu@$m {" /tmp/board-applied.dts | grep -m1 status
+          done
 
       - name: Save ccache
         if: always()
         uses: actions/cache/save@v4
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ env.KERNEL_REF }}-${{ hashFiles('patchsrc/rknpu-7.2.patch') }}-${{ github.run_id }}
+          key: ccache-${{ env.KERNEL_REF }}-${{ hashFiles('rknpu/driver/**') }}-${{ github.run_id }}
 
       - name: Store build artifacts
         if: always()
@@ -139,8 +131,6 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
           path: |
-            linux/drivers/rknpu/rknpu.ko
-            linux/arch/arm64/boot/dts/rockchip/rk3588-evb1-v10.dtb
-            linux/vmlinux.symvers
-            linux/.config
-            linux/System.map
+            rknpu/driver/rknpu.ko
+            /tmp/rknpu.dtbo
+            /tmp/board-applied.dtb

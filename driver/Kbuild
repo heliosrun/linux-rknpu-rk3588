@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: GPL-2.0
+# Kbuild object list for the mainline-ported Rockchip RKNPU driver
+# (v0.9.8). Mirrors the in-tree drivers/rknpu/Makefile on the
+# rknpu-rk3588 branch: the vendor OPP/monitor framework has no mainline
+# equivalent, so rknpu_devfreq.o is replaced by the failsafe stub, and
+# rknpu_mem.o (DMA_HEAP) / rknpu_mm.o (SRAM) stay excluded (DRM_GEM only).
+
+obj-m += rknpu.o
+
+rknpu-y += rknpu_drv.o
+rknpu-y += rknpu_reset.o
+rknpu-y += rknpu_job.o
+rknpu-y += rknpu_debugger.o
+rknpu-y += rknpu_iommu.o
+rknpu-y += rknpu_gem.o
+rknpu-y += rknpu_fence.o
+rknpu-y += rknpu_devfreq_stub.o
+
+ccflags-y += -I$(src)/include
+
+# The in-tree build picks these up from the kernel Kconfig; out-of-tree
+# they must match the object list above explicitly (value 1, like the
+# generated autoconf.h for bool/tristate-enabled symbols):
+#   DRM_GEM: rknpu_gem.o is built (DMA allocation via DRM GEM)
+#   FENCE:   rknpu_fence.o is built (dma_fence/sync_file support)
+#   DEBUG_FS: debugfs interface in rknpu_debugger.o enabled
+# DMA_HEAP / PROC_FS / SRAM stay undefined: rknpu_mem.o, procfs and
+# rknpu_mm.o are not part of this build.
+ccflags-y += -DCONFIG_ROCKCHIP_RKNPU_DRM_GEM=1
+ccflags-y += -DCONFIG_ROCKCHIP_RKNPU_FENCE=1
+ccflags-y += -DCONFIG_ROCKCHIP_RKNPU_DEBUG_FS=1

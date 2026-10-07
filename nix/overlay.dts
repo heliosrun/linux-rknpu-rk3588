@@ -1,0 +1,84 @@
+/dts-v1/;
+/plugin/;
+
+#include <dt-bindings/clock/rockchip,rk3588-cru.h>
+#include <dt-bindings/reset/rockchip,rk3588-cru.h>
+#include <dt-bindings/power/rk3588-power.h>
+#include <dt-bindings/interrupt-controller/arm-gic.h>
+#include <dt-bindings/interrupt-controller/irq.h>
+
+/*
+ * Rockchip RKNPU (vendor v0.9.8 driver) for RK3588 on mainline kernels.
+ *
+ * Labels rknn_core_* / rknn_mmu_* come from the base device tree's
+ * __symbols__ table (mainline rocket nodes). The rocket driver owns the
+ * same MMIO when its cores are enabled, so they are switched off here
+ * and the vendor node is created instead. The per-core IOMMU nodes are
+ * enabled so the mainline rockchip-iommu driver (CONFIG_ROCKCHIP_IOMMU)
+ * binds them; the rknpu device lists all three in its iommus property,
+ * which merges them into one IOMMU group with a single shared default
+ * DMA domain - exactly what the driver's out-of-GKI DMA path expects.
+ */
+
+&rknn_core_0 {
+	status = "disabled";
+};
+
+&rknn_core_1 {
+	status = "disabled";
+};
+
+&rknn_core_2 {
+	status = "disabled";
+};
+
+&rknn_mmu_0 {
+	status = "okay";
+};
+
+&rknn_mmu_1 {
+	status = "okay";
+};
+
+&rknn_mmu_2 {
+	status = "okay";
+};
+
+&{/} {
+	rknpu: rknpu@fdab0000 {
+		compatible = "rockchip,rk3588-rknpu";
+		reg = <0x0 0xfdab0000 0x0 0x10000>,
+		      <0x0 0xfdac0000 0x0 0x10000>,
+		      <0x0 0xfdad0000 0x0 0x10000>;
+		interrupt-parent = <&gic>;
+		interrupts = <GIC_SPI 110 IRQ_TYPE_LEVEL_HIGH 0>,
+			     <GIC_SPI 111 IRQ_TYPE_LEVEL_HIGH 0>,
+			     <GIC_SPI 112 IRQ_TYPE_LEVEL_HIGH 0>;
+		interrupt-names = "npu0_irq", "npu1_irq", "npu2_irq";
+		clocks = <&scmi_clk SCMI_CLK_NPU>, <&cru ACLK_NPU0>,
+			 <&cru ACLK_NPU1>, <&cru ACLK_NPU2>,
+			 <&cru HCLK_NPU0>, <&cru HCLK_NPU1>,
+			 <&cru HCLK_NPU2>, <&cru PCLK_NPU_ROOT>;
+		clock-names = "clk_npu", "aclk0",
+			      "aclk1", "aclk2",
+			      "hclk0", "hclk1",
+			      "hclk2", "pclk";
+		assigned-clocks = <&scmi_clk SCMI_CLK_NPU>;
+		/* BSP default is 200 MHz; 600 MHz is the practical fixed
+		 * rate used for RK3588 NPU bring-up. Adjust here if the
+		 * SCMI clock rejects it. */
+		assigned-clock-rates = <600000000>;
+		resets = <&cru SRST_A_RKNN0>, <&cru SRST_A_RKNN1>,
+			 <&cru SRST_A_RKNN2>,
+			 <&cru SRST_H_RKNN0>, <&cru SRST_H_RKNN1>,
+			 <&cru SRST_H_RKNN2>;
+		reset-names = "srst_a0", "srst_a1", "srst_a2",
+			      "srst_h0", "srst_h1", "srst_h2";
+		power-domains = <&power RK3588_PD_NPUTOP>,
+				<&power RK3588_PD_NPU1>,
+				<&power RK3588_PD_NPU2>;
+		power-domain-names = "npu0", "npu1", "npu2";
+		iommus = <&rknn_mmu_0>, <&rknn_mmu_1>, <&rknn_mmu_2>;
+		status = "okay";
+	};
+};
