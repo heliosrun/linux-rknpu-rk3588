@@ -5,35 +5,81 @@ on:
   push:
     branches: [ main ]
 
+# Prevent concurrent runs from fighting over the cache and the runner pool.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  KERNEL_REF: v7.2
+  PATCH: rknpu-7.2.patch
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+  CCACHE_MAXSIZE: 5G
+  BUILD_JOBS: 8
+
 jobs:
   build-arm64:
     runs-on: blacksmith-8vcpu-ubuntu-2404-arm
     timeout-minutes: 360
     steps:
-      - name: Checkout Linux v7.2 (pristine)
-        uses: useblacksmith/checkout@v1
-        with:
-          repository: torvalds/linux
-          ref: v7.2
-          fetch-depth: 1
-          path: linux
-
       - name: Checkout RKNPU patch
         uses: useblacksmith/checkout@v1
         with:
           path: patchsrc
 
-      - name: Apply RKNPU port patch
-        run: |
-          cd linux
-          git apply --verbose ../patchsrc/rknpu-7.2.patch
-          echo "=== patch applied, tree state ==="
-          git status --short | head -20
+      # Cache the pristine v7.2 checkout keyed on the kernel ref only, so it
+      # is shared by every run regardless of patch changes.
+      - name: Restore kernel source
+        id: src
+        uses: actions/cache/restore@v4
+        with:
+          path: linux
+          key: linux-${{ env.KERNEL_REF }}-src-v1
+
+      - name: Checkout Linux ${{ env.KERNEL_REF }}
+        if: steps.src.outputs.cache-hit != 'true'
+        uses: useblacksmith/checkout@v1
+        with:
+          repository: torvalds/linux
+          ref: ${{ env.KERNEL_REF }}
+          fetch-depth: 1
+          path: linux
+
+      - name: Save kernel source
+        if: steps.src.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: linux
+          key: linux-${{ env.KERNEL_REF }}-src-v1
 
       - name: Install build dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq build-essential flex bison libssl-dev libelf-dev bc dwarves python3 gzip xz-utils device-tree-compiler
+          sudo apt-get install -y -qq build-essential flex bison libssl-dev libelf-dev bc dwarves python3 gzip xz-utils device-tree-compiler ccache
+
+      # Restore the compiler cache; restore-keys let a run reuse the most
+      # recent cache even when the exact key misses.
+      - name: Restore ccache
+        id: cc
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ env.KERNEL_REF }}-${{ hashFiles('patchsrc/rknpu-7.2.patch') }}
+          restore-keys: |
+            ccache-${{ env.KERNEL_REF }}-
+
+      - name: Apply RKNPU port patch
+        run: |
+          cd linux
+          git checkout -- .
+          git clean -fdq -e '*.o' -e '*.a' -e '.config' -e 'include/config' 2>/dev/null || true
+          if git apply --check ../patchsrc/${{ env.PATCH }} 2>/dev/null; then
+            git apply --verbose ../patchsrc/${{ env.PATCH }}
+            echo "patch applied"
+          else
+            echo "patch already applied"
+          fi
+          git status --short | head -20
 
       - name: Configure kernel (arm64 + RKNPU)
         run: |
@@ -47,44 +93,54 @@ jobs:
           echo "=== relevant config ==="
           grep -E 'ROCKCHIP_RKNPU|ARCH_ROCKCHIP' .config
 
-      - name: Build rknpu module
+      # rknpu.ko only links once vmlinux.symvers exists, so build the kernel
+      # first, then the modules. ccache makes both incremental.
+      - name: Build vmlinux
         run: |
           cd linux
-          make ARCH=arm64 -j"$(nproc)" drivers/rknpu/
-          echo "=== module output ==="
-          ls -la drivers/rknpu/*.ko || true
+          make ARCH=arm64 CC="ccache gcc" -j"${{ env.BUILD_JOBS }}" vmlinux
+          ls -la vmlinux vmlinux.symvers
 
-      - name: Build vmlinux and modules
+      - name: Build modules (links rknpu.ko)
         run: |
           cd linux
-          make ARCH=arm64 -j"$(nproc)" vmlinux modules
-          echo "=== vmlinux ==="
-          ls -la vmlinux
-
-      - name: Verify rknpu.ko
-        run: |
-          cd linux
+          make ARCH=arm64 CC="ccache gcc" -j"${{ env.BUILD_JOBS }}" modules
           ls -la drivers/rknpu/rknpu.ko
-          echo "=== modinfo ==="
-          modinfo drivers/rknpu/rknpu.ko | head -30
-          echo "=== vermagic ==="
-          modinfo -F vermagic drivers/rknpu/rknpu.ko
-          echo "=== builder/compiler warnings check ==="
-          dmesg 2>/dev/null | tail -2 || true
 
       - name: Build RK3588 DTB
         run: |
           cd linux
-          make ARCH=arm64 -j"$(nproc)" dtbs
+          make ARCH=arm64 -j"${{ env.BUILD_JOBS }}" dtbs
           ls -la arch/arm64/boot/dts/rockchip/rk3588-evb1-v10.dtb
-          echo "=== vendor node in compiled DTB ==="
-          dtc -I dtb -O dts arch/arm64/boot/dts/rockchip/rk3588-evb1-v10.dtb 2>/dev/null | grep -B2 -A6 'rk3588-rknpu' | head -30
 
-      - name: Upload artifacts
+      - name: Verify rknpu.ko and DTB
+        run: |
+          cd linux
+          echo "=== modinfo ==="
+          modinfo drivers/rknpu/rknpu.ko | head -30
+          echo "=== vermagic ==="
+          modinfo -F vermagic drivers/rknpu/rknpu.ko
+          echo "=== vendor node in compiled DTB ==="
+          dtc -I dtb -O dts arch/arm64/boot/dts/rockchip/rk3588-evb1-v10.dtb 2>/dev/null \
+            | grep -B2 -A6 'rk3588-rknpu' | head -30
+
+      - name: Save ccache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ env.KERNEL_REF }}-${{ hashFiles('patchsrc/rknpu-7.2.patch') }}-${{ github.run_id }}
+
+      - name: Store build artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: rknpu-rk3588-module
+          name: rknpu-rk3588-${{ github.sha }}
+          if-no-files-found: warn
+          retention-days: 30
           path: |
             linux/drivers/rknpu/rknpu.ko
             linux/arch/arm64/boot/dts/rockchip/rk3588-evb1-v10.dtb
-          if-no-files-found: error
+            linux/vmlinux.symvers
+            linux/.config
+            linux/System.map
