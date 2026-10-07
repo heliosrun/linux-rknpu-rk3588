@@ -115,17 +115,31 @@ jobs:
           # (same file the NixOS deviceTree machinery applies) needs it.
           make ARCH=arm64 O=build DTC_FLAGS="-@" -j"${{ env.BUILD_JOBS }}" dtbs
           $FDTOVERLAY -i "$BASE" -o /tmp/board-applied.dtb /tmp/rknpu.dtbo
-          $DTC -I dtb -O dts /tmp/board-applied.dtb -o /tmp/board-applied.dts
-          echo "=== vendor node status ==="
-          grep -A3 'rknpu@fdab0000 {' /tmp/board-applied.dts | head -4
-          echo "=== rocket cores disabled? ==="
-          for c in rknn_core_0 rknn_core_1 rknn_core_2; do
-            grep -A30 "$c: npu@" /tmp/board-applied.dts | grep -m1 status
-          done
-          echo "=== iommus enabled? ==="
-          for m in fdab9000 fdaca000 fdada000; do
-            grep -A30 "iommu@$m {" /tmp/board-applied.dts | grep -m1 status
-          done
+
+          # Path-based assertions via fdtget: no decompile, no labels,
+          # works with any dtc version.
+          FDTGET=$(find /usr -name fdtget -type f | head -1)
+          check() {
+            got=$($FDTGET /tmp/board-applied.dtb "$1" "$2")
+            if [ "$got" != "$3" ]; then
+              echo "FAIL: $1 $2: got '"$got"', want '$3'"
+              exit 1
+            fi
+            echo "ok: $1 $2 = $got"
+          }
+          check /rknpu@fdab0000 status okay
+          check /rknpu@fdab0000 compatible rockchip,rk3588-rknpu
+          check /rknpu@fdab0000 assigned-clock-rates 600000000
+          iommus=$($FDTGET /tmp/board-applied.dtb /rknpu@fdab0000 iommus)
+          echo "iommus: $iommus"
+          [ "$(echo $iommus | wc -w)" = "3" ] || { echo "FAIL: want 3 iommus"; exit 1; }
+          check /npu@fdab0000 status disabled
+          check /npu@fdac0000 status disabled
+          check /npu@fdad0000 status disabled
+          check /iommu@fdab9000 status okay
+          check /iommu@fdaca000 status okay
+          check /iommu@fdada000 status okay
+          echo "ALL DT CHECKS PASSED"
 
       - name: Save ccache
         if: always()
