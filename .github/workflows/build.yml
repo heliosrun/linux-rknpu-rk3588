@@ -120,11 +120,11 @@ jobs:
           grep -A3 'rknpu@fdab0000 {' /tmp/board-applied.dts | head -4
           echo "=== rocket cores disabled? ==="
           for c in rknn_core_0 rknn_core_1 rknn_core_2; do
-            grep -A18 "$c: npu@" /tmp/board-applied.dts | grep -m1 status
+            grep -A30 "$c: npu@" /tmp/board-applied.dts | grep -m1 status
           done
           echo "=== iommus enabled? ==="
           for m in fdab9000 fdaca000 fdada000; do
-            grep -A12 "iommu@$m {" /tmp/board-applied.dts | grep -m1 status
+            grep -A30 "iommu@$m {" /tmp/board-applied.dts | grep -m1 status
           done
 
       - name: Save ccache
