@@ -1,0 +1,90 @@
+name: Build RKNPU module
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build-arm64:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 360
+    steps:
+      - name: Checkout Linux v7.2 (pristine)
+        uses: actions/checkout@v4
+        with:
+          repository: torvalds/linux
+          ref: v7.2
+          fetch-depth: 1
+          path: linux
+
+      - name: Checkout RKNPU patch
+        uses: actions/checkout@v4
+        with:
+          path: patchsrc
+
+      - name: Apply RKNPU port patch
+        run: |
+          cd linux
+          git apply --verbose ../patchsrc/rknpu-7.2.patch
+          echo "=== patch applied, tree state ==="
+          git status --short | head -20
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential flex bison libssl-dev libelf-dev bc dwarves python3 gzip xz-utils device-tree-compiler
+
+      - name: Configure kernel (arm64 + RKNPU)
+        run: |
+          cd linux
+          make ARCH=arm64 defconfig
+          ./scripts/config --file .config --module ROCKCHIP_RKNPU
+          ./scripts/config --file .config --enable ROCKCHIP_RKNPU_DRM_GEM
+          ./scripts/config --file .config --enable ROCKCHIP_RKNPU_FENCE
+          ./scripts/config --file .config --enable ROCKCHIP_RKNPU_DEBUG_FS
+          make ARCH=arm64 olddefconfig
+          echo "=== relevant config ==="
+          grep -E 'ROCKCHIP_RKNPU|ARCH_ROCKCHIP' .config
+
+      - name: Build rknpu module
+        run: |
+          cd linux
+          make ARCH=arm64 -j"$(nproc)" drivers/rknpu/
+          echo "=== module output ==="
+          ls -la drivers/rknpu/*.ko || true
+
+      - name: Build vmlinux and modules
+        run: |
+          cd linux
+          make ARCH=arm64 -j"$(nproc)" vmlinux modules
+          echo "=== vmlinux ==="
+          ls -la vmlinux
+
+      - name: Verify rknpu.ko
+        run: |
+          cd linux
+          ls -la drivers/rknpu/rknpu.ko
+          echo "=== modinfo ==="
+          modinfo drivers/rknpu/rknpu.ko | head -30
+          echo "=== vermagic ==="
+          modinfo -F vermagic drivers/rknpu/rknpu.ko
+          echo "=== builder/compiler warnings check ==="
+          dmesg 2>/dev/null | tail -2 || true
+
+      - name: Build RK3588 DTB
+        run: |
+          cd linux
+          make ARCH=arm64 -j"$(nproc)" dtbs
+          ls -la arch/arm64/boot/dts/rockchip/rk3588-evb1-v10.dtb
+          echo "=== vendor node in compiled DTB ==="
+          dtc -I dtb -O dts arch/arm64/boot/dts/rockchip/rk3588-evb1-v10.dtb 2>/dev/null | grep -B2 -A6 'rk3588-rknpu' | head -30
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rknpu-rk3588-module
+          path: |
+            linux/drivers/rknpu/rknpu.ko
+            linux/arch/arm64/boot/dts/rockchip/rk3588-evb1-v10.dtb
+          if-no-files-found: error
