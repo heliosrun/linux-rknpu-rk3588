@@ -33,7 +33,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: linux
-          key: linux-${{ env.KERNEL_REF }}-src-v2
+          key: linux-${{ env.KERNEL_REF }}-src-v3
 
       - name: Checkout Linux ${{ env.KERNEL_REF }} (pristine)
         if: steps.src.outputs.cache-hit != 'true'
@@ -44,12 +44,19 @@ jobs:
           fetch-depth: 1
           path: linux
 
+      # kbuild invokes git (setlocalversion) and a restored checkout can
+      # carry runner-specific git mirror alternates that fail on a
+      # different runner. The build does not need git; strip it. This
+      # also keeps the saved cache clean for future restores.
+      - name: Strip git metadata
+        run: rm -rf linux/.git
+
       - name: Save kernel source
         if: steps.src.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: linux
-          key: linux-${{ env.KERNEL_REF }}-src-v2
+          key: linux-${{ env.KERNEL_REF }}-src-v3
 
       - name: Install build dependencies
         run: |
