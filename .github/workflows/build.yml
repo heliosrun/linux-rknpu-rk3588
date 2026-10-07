@@ -66,14 +66,15 @@ jobs:
             ccache-${{ env.KERNEL_REF }}-
 
       # Pure out-of-tree build against a pristine kernel: no patching.
-      # modules (not just vmlinux) so Module.symvers exists for the
-      # external module link.
-      - name: Build pristine kernel modules
+      # "all" = vmlinux + modules in one correctly ordered pass; the
+      # modules pass needs vmlinux.symvers (built-in symbol exports) for
+      # its modpost, and produces Module.symvers for our external link.
+      - name: Build pristine kernel (vmlinux + modules)
         run: |
           cd linux
           make ARCH=arm64 O=build defconfig
-          make ARCH=arm64 O=build CC="ccache gcc" -j"${{ env.BUILD_JOBS }}" modules
-          ls -la build/Module.symvers
+          make ARCH=arm64 O=build CC="ccache gcc" -j"${{ env.BUILD_JOBS }}" all
+          ls -la build/Module.symvers build/vmlinux
 
       - name: Build rknpu module (out-of-tree)
         run: |
