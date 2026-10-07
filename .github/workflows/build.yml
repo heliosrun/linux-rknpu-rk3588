@@ -111,7 +111,9 @@ jobs:
             "${{ github.workspace }}/rknpu/nix/overlay.dts" -o /tmp/overlay-pp.dts
           $DTC -@ -I dts -O dtb -o /tmp/rknpu.dtbo /tmp/overlay-pp.dts
           BASE=build/arch/arm64/boot/dts/rockchip/rk3588-friendlyelec-cm3588-nas.dtb
-          make ARCH=arm64 O=build -j"${{ env.BUILD_JOBS }}" dtbs
+          # -@ so the DTB carries __symbols__: our label-based overlay
+          # (same file the NixOS deviceTree machinery applies) needs it.
+          make ARCH=arm64 O=build DTC_FLAGS="-@" -j"${{ env.BUILD_JOBS }}" dtbs
           $FDTOVERLAY -i "$BASE" -o /tmp/board-applied.dtb /tmp/rknpu.dtbo
           $DTC -I dtb -O dts /tmp/board-applied.dtb -o /tmp/board-applied.dts
           echo "=== vendor node status ==="
