@@ -139,9 +139,9 @@ iommu-enabled poll stub, both used by rknpu_drv.c.
    (inputs.rknpu.url = "github:heliosrun/linux-rknpu-rk3588",
    imports = [ rknpu.nixosModules.rknpu ]) once the private-repo fetch
    story for the cm3588 is confirmed.
-4. No flake.lock in this repo: nix.yml currently tracks
-   nixos-unstable head. Commit a lockfile for reproducible CI, bump
-   deliberately.
+4. flake.lock is now committed (auto-generated on first nix eval).
+   Keep it pinned and bump deliberately via `nix flake lock
+   --update-input nixpkgs` when port-verifying a new kernel.
 5. NO_GKI-guarded code (init_domain/switch_domain, the 7.2 cookie
    replication there) never compiles on mainline. Kept as
    future-proofing, but if it rots, delete it rather than maintain
