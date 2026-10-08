@@ -3,7 +3,9 @@
 Date: 2026-10-08. Reviewed against torvalds v7.2,
 nixpkgs linux 7.2.9, armbian rk-6.1-rkr6.1 vendor source. Every claim
 below was checked against the actual sources; file:line references are
-to torvalds v7.2 unless noted.
+to torvalds v7.2 unless noted. Cross-validated 2026-10-08 against
+gregordinary/rockchip-npu-notes (independent HW measurements on
+RK3588, rknpu 0.9.8) - see "External cross-validation" at the end.
 
 ## Finding 1 (HIGH, fixed): wrong IOMMU topology in the DT overlay
 
@@ -155,7 +157,43 @@ iommu-enabled poll stub, both used by rknpu_drv.c.
    rknpu device in a group whose .../iommu_devices lists ONLY the
    rknpu-mmu device (not three separate ones).
 3. Single-core inference (mask to core 2, then 0, then 1) with known
-   checksums before enabling all three.
+   checksums before enabling all three. Note their lane-0 finding:
+   rare (~2^-16 low) per-core output deviations are deterministic per
+   input, so checksums remain stable - but they are core-specific.
 4. Multi-core soak + dmesg watch for rk_iommu_irq page faults.
 5. Sleep/wake cycle (see Finding 1 residual).
 6. Then raise to 600 MHz (see item 1) with checksum validation.
+
+## External cross-validation (rockchip-npu-notes, 2026-10-08)
+
+Independent HW measurements on RK3588 with rknpu 0.9.8 confirm or
+sharpen three of the above claims (all tags below are theirs):
+
+- Single shared domain CONFIRMED: "maps every buffer through one
+  IOMMU domain" [HW sweep]. This is the foundation Finding 1 rests
+  on. No statement there contradicts the 4-window single-device
+  model; their focus is the rocket path (per-core nodes, per-fd
+  windows - explicitly "a property of rocket, not of the silicon").
+- Clock CONFIRMED: scmi_clk_npu "boots pinned at 200 MHz (vendor
+  POWER_DOWN_FREQ). Raising it to 600 MHz is worth ~1.43x" [HW
+  sweep]. Our assigned-clock-rates approach targets the same end
+  state as their in-driver raise.
+- Voltage SHARPENS item 1: "Firmware does not couple voltage to
+  frequency. The BL31 SCMI clock path programs only the PLL"
+  [firmware behavior]. Vendor f->V map: 300-700 MHz needs 0.70 V
+  (800->0.75, 900->0.80, 1000->0.85). Their board rail sits at
+  0.80 V. Concrete check for the CM3588: confirm vdd_npu >= 0.70 V
+  (BSP OPP minima are 0.775 V, so this is expected to pass). Their
+  voltage-holding patch pattern (hold the regulator for device
+  lifetime, scale with the clock from runtime-PM hooks) is the
+  template if we ever need more than fixed-clock.
+- NEW, immich-relevant: the shared domain budget is ~3.9 GB and the
+  generic mapping path LEAKS it (persists until reboot). Flag bit 10
+  RKNPU_MEM_IOMMU_LIMIT_IOVA_ALIGNMENT (>=0.9.7; our 0.9.8 honors
+  it) avoids the leak; their provider sets it by default. If immich
+  exhausts IOVA over days of uptime, check whether librknnrt sets
+  this flag before suspecting the kernel - the fix would be
+  userspace-side.
+- Consistency note: their keep-attached finding (~20 us/submit saved
+  on rocket) is moot here - the vendor driver never detaches (our
+  stubbed switch path included), so we get keep-attached by default.
