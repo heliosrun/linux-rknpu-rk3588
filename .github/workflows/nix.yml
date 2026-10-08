@@ -27,6 +27,9 @@ jobs:
       - name: Build rknpu module (out-of-tree vs nixpkgs linuxPackages_latest)
         run: nix build -L .#packages.aarch64-linux.rknpu
 
+      - name: Check device tree overlay (nixpkgs kernel DTBs)
+        run: nix build -L .#checks.aarch64-linux.device-tree
+
       - name: Verify vermagic
         run: |
           KO=$(find result/lib/modules -name rknpu.ko)

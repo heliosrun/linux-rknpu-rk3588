@@ -17,6 +17,15 @@
         default = self.packages.${system}.rknpu;
       };
 
+      # Validates nix/overlay.dts against the pinned nixpkgs kernel DTBs
+      # using the same gating NixOS apply_overlays.py uses (substring
+      # filter + root-compatible intersection), then asserts node states.
+      checks.${system} = {
+        device-tree = pkgs.callPackage ./nix/check-dt.nix {
+          kernel = pkgs.linuxPackages_latest.kernel;
+        };
+      };
+
       # Consume from a NixOS host:
       #   imports = [ linux-rknpu-rk3588.nixosModules.rknpu ];
       #   hardware.rknpu.enable = true;
