@@ -1,6 +1,7 @@
 {
   config,
   lib,
+  pkgs,
   ...
 }:
 let
@@ -23,6 +24,12 @@ in
     ];
 
     boot.kernelModules = [ "rknpu" ];
+
+    # Bring-up test tools: npu-smoke-test (stage-1 checks), rknpu-test
+    # (per-core fp16 matmul sweep), matmul_fp16_rocket (raw probe).
+    environment.systemPackages = [
+      (pkgs.callPackage ./test.nix { })
+    ];
 
     hardware.deviceTree.overlays = [
       {
