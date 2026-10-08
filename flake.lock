@@ -16,43 +16,9 @@
         "type": "github"
       }
     },
-    "rknpu-submit": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1791167041,
-        "narHash": "sha256-hcg+L9hpQb6I7JtyRdB9Tqfb6Z7hM37sH38SPKSom1Q=",
-        "owner": "gregordinary",
-        "repo": "rknpu-submit",
-        "rev": "6b144b19bb6700f96fc1638ccc7f20ad8719d527",
-        "type": "github"
-      },
-      "original": {
-        "owner": "gregordinary",
-        "repo": "rknpu-submit",
-        "type": "github"
-      }
-    },
-    "rocket-userspace": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1790985200,
-        "narHash": "sha256-XjkRo1iwratu4ATtY3PX8V5AJaSzDulSJB9yZyeyLJE=",
-        "owner": "gregordinary",
-        "repo": "rocket-userspace",
-        "rev": "f86cf52c666b4eddadc17d80d6c558b4067c0d6b",
-        "type": "github"
-      },
-      "original": {
-        "owner": "gregordinary",
-        "repo": "rocket-userspace",
-        "type": "github"
-      }
-    },
     "root": {
       "inputs": {
-        "nixpkgs": "nixpkgs",
-        "rknpu-submit": "rknpu-submit",
-        "rocket-userspace": "rocket-userspace"
+        "nixpkgs": "nixpkgs"
       }
     }
   },

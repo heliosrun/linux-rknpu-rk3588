@@ -4,15 +4,8 @@
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-  # Pinned bring-up test sources (non-flake inputs, used by
-  # packages.aarch64-linux.rknpu-test).
-  inputs.rocket-userspace.url = "github:gregordinary/rocket-userspace";
-  inputs.rocket-userspace.flake = false;
-  inputs.rknpu-submit.url = "github:gregordinary/rknpu-submit";
-  inputs.rknpu-submit.flake = false;
-
   outputs =
-    { self, nixpkgs, rocket-userspace, rknpu-submit }:
+    { self, nixpkgs }:
     let
       # aarch64-linux only: the driver is RK35xx-specific.
       system = "aarch64-linux";
@@ -23,10 +16,7 @@
         rknpu = pkgs.linuxPackages_latest.callPackage ./nix/package.nix { };
 
         # Bring-up test tools (compile anywhere, run on RK3588 HW only).
-        rknpu-test = pkgs.callPackage ./nix/test.nix {
-          rocket-userspace = rocket-userspace;
-          rknpu-submit = rknpu-submit;
-        };
+        rknpu-test = pkgs.callPackage ./nix/test.nix { };
 
         default = self.packages.${system}.rknpu;
       };

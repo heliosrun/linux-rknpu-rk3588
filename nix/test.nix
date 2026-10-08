@@ -2,10 +2,24 @@
   lib,
   stdenv,
   cmake,
-  # Pinned source checkouts (flake inputs), passed by callPackage.
-  rocket-userspace,
-  rknpu-submit,
+  fetchFromGitHub,
 }:
+
+let
+  # Pinned test sources. Bump rev + hash together.
+  rocket-userspace = fetchFromGitHub {
+    owner = "gregordinary";
+    repo = "rocket-userspace";
+    rev = "f86cf52c666b4eddadc17d80d6c558b4067c0d6b";
+    hash = "sha256-XjkRo1iwratu4ATtY3PX8V5AJaSzDulSJB9yZyeyLJE=";
+  };
+  rknpu-submit = fetchFromGitHub {
+    owner = "gregordinary";
+    repo = "rknpu-submit";
+    rev = "6b144b19bb6700f96fc1638ccc7f20ad8719d527";
+    hash = "sha256-hcg+L9hpQb6I7JtyRdB9Tqfb6Z7hM37sH38SPKSom1Q=";
+  };
+in
 stdenv.mkDerivation {
   pname = "rknpu-test";
   version = "0.1.0";
