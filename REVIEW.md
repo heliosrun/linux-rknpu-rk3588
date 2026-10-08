@@ -222,7 +222,7 @@ Checks: render node bound to RKNPU, /dev/rknpu, dmesg "using iommu
 mode", IOMMU group holds exactly the rknpu device, clock lines.
 Failure map: "non-iommu mode" = overlay not applied; no render node =
 probe failed (read dmesg). If SSH is dead, the guard reverts at +15
-min automatically.
+min automatically - including the reboot into the old generation.
 
 Stage 2 - compute gate:
 
@@ -256,7 +256,8 @@ Cleanup after full validation:
     # cm3588.nix, then: sudo rm /etc/rknpu-guard-cancelled
 
 Rollback at any point before cancelling: the guard does it
-automatically at +15 min; manually via
+automatically at +15 min (rollback + reboot into the old generation);
+manually via
 `sudo /run/current-system/sw/bin/nixos-rebuild switch --rollback`.
 Rollback after cancelling (i.e. days later, NPU suspected bad):
 `sudo /nix/var/nix/profiles/system-<old>-link/bin/switch-to-configuration
