@@ -4,7 +4,17 @@ on:
   workflow_dispatch:
   push:
     branches: [ main ]
+    paths:
+      - driver/**
+      - linux-integration/**
+      - nix/overlay.dts
+      - .github/workflows/build.yml
   pull_request:
+    paths:
+      - driver/**
+      - linux-integration/**
+      - nix/overlay.dts
+      - .github/workflows/build.yml
 
 # Prevent concurrent runs from fighting over the cache and the runner pool.
 concurrency:
@@ -19,46 +29,7 @@ env:
   BUILD_JOBS: 8
 
 jobs:
-  changes:
-    runs-on: ubuntu-latest
-    outputs:
-      kernel: ${{ steps.filter.outputs.kernel }}
-    steps:
-      - name: Detect changed paths
-        id: filter
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            RANGE="${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}"
-          elif [ "${{ github.event_name }}" = "push" ] && ! [[ "${{ github.event.before }}" =~ ^0+$ ]]; then
-            RANGE="${{ github.event.before }}...${{ github.sha }}"
-          else
-            RANGE=""
-          fi
-          if [ -z "$RANGE" ]; then
-            FILES="FORCE-ALL"
-          else
-            FILES=$(gh api "repos/${{ github.repository }}/compare/$RANGE" --paginate --jq ".files[].filename") || FILES="FORCE-ALL"
-          fi
-          match() {
-            [ "$FILES" = "FORCE-ALL" ] && return 0
-            local f
-            while IFS= read -r f; do
-              case "$f" in $1) return 0;; esac
-            done <<< "$FILES"
-            return 1
-          }
-          if match "driver/*" || match "linux-integration/*" || match ".github/workflows/build.yml"; then
-            KERNEL=true
-          else
-            KERNEL=false
-          fi
-          echo "kernel=$KERNEL" >> "$GITHUB_OUTPUT"
-
   build-arm64:
-    needs: changes
-    if: needs.changes.outputs.kernel == "true"
     runs-on: blacksmith-8vcpu-ubuntu-2404-arm
     timeout-minutes: 360
     steps:

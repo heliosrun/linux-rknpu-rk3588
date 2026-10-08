@@ -4,53 +4,24 @@ on:
   workflow_dispatch:
   push:
     branches: [ main ]
+    paths:
+      - driver/**
+      - nix/**
+      - flake.*
+      - .github/workflows/nix.yml
   pull_request:
+    paths:
+      - driver/**
+      - nix/**
+      - flake.*
+      - .github/workflows/nix.yml
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  changes:
-    runs-on: ubuntu-latest
-    outputs:
-      nix: ${{ steps.filter.outputs.nix }}
-    steps:
-      - name: Detect changed paths
-        id: filter
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            RANGE="${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}"
-          elif [ "${{ github.event_name }}" = "push" ] && ! [[ "${{ github.event.before }}" =~ ^0+$ ]]; then
-            RANGE="${{ github.event.before }}...${{ github.sha }}"
-          else
-            RANGE=""
-          fi
-          if [ -z "$RANGE" ]; then
-            FILES="FORCE-ALL"
-          else
-            FILES=$(gh api "repos/${{ github.repository }}/compare/$RANGE" --paginate --jq ".files[].filename") || FILES="FORCE-ALL"
-          fi
-          match() {
-            [ "$FILES" = "FORCE-ALL" ] && return 0
-            local f
-            while IFS= read -r f; do
-              case "$f" in $1) return 0;; esac
-            done <<< "$FILES"
-            return 1
-          }
-          if match "driver/*" || match "nix/*" || match "flake.*" || match ".github/workflows/nix.yml"; then
-            NIX=true
-          else
-            NIX=false
-          fi
-          echo "nix=$NIX" >> "$GITHUB_OUTPUT"
-
   nix-build-arm64:
-    needs: changes
-    if: needs.changes.outputs.nix == "true"
     runs-on: blacksmith-8vcpu-ubuntu-2404-arm
     timeout-minutes: 360
     steps:
