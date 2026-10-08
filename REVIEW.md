@@ -212,6 +212,10 @@ is acceptable):
     sudo nixos-rebuild switch > /tmp/rknpu-switch.log 2>&1
     sudo modprobe rknpu && sudo rmmod rknpu   # loadability check; the
         # running DTB has no vendor node yet, so the probe is a no-op
+    # WARNING: do NOT touch /etc/rknpu-guard-cancelled before this
+    # reboot. The marker disables the auto-rollback for the boot that
+    # follows, and a headless first boot is exactly when you want it
+    # armed. Touch it only AFTER the stage-1/2 checks pass.
     sudo reboot
 
 Stage 1 - smoke (after reboot; the guard timer is ticking):
