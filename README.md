@@ -63,3 +63,5 @@ derivation handles this via kernel.dev.
    and the Kbuild ccflags (config symbol drift).
 3. For in-tree builds, re-apply linux-integration/ on the new tree and
    refresh the rk3588-base.dtsi node block if the upstream file moved.
+
+CI runs are path-filtered: docs-only pushes skip both workflows.
