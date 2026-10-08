@@ -82,11 +82,13 @@
 			      "hclk0", "hclk1",
 			      "hclk2", "pclk";
 		assigned-clocks = <&scmi_clk SCMI_CLK_NPU>;
-		/* BSP default is 200 MHz; 600 MHz is the practical fixed
-		 * rate used for RK3588 NPU bring-up. HARDWARE REVIEW: this
-		 * sets rate only - nothing sets the NPU rail voltage, so
-		 * confirm stability on the board before raising it. */
-		assigned-clock-rates = <600000000>;
+		/* 200 MHz: the BSP default, voltage-safe. The SCMI path
+		 * programs the PLL only (no voltage coupling), so raising this
+		 * without also raising vdd_npu is V/f-marginal - a 600 MHz rate
+		 * hard-locked the board at probe (observed 2026-10-08). Raise
+		 * only with a confirmed rail voltage (BSP f->V map:
+		 * 300-700 MHz -> 0.70 V). */
+		assigned-clock-rates = <200000000>;
 		resets = <&cru SRST_A_RKNN0>, <&cru SRST_A_RKNN1>,
 			 <&cru SRST_A_RKNN2>,
 			 <&cru SRST_H_RKNN0>, <&cru SRST_H_RKNN1>,

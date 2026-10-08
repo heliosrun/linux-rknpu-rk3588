@@ -29,6 +29,9 @@
 			      "hclk0", "hclk1",
 			      "hclk2", "pclk";
 		assigned-clocks = <&scmi_clk SCMI_CLK_NPU>;
+		/* 200 MHz = BSP default, voltage-safe. 600 MHz hard-locked the
+		 * board at probe (SCMI programs the PLL only, no voltage
+		 * coupling); raise only with a confirmed vdd_npu >= 0.70 V. */
 		assigned-clock-rates = <200000000>;
 		resets = <&cru SRST_A_RKNN0>, <&cru SRST_A_RKNN1>,
 			 <&cru SRST_A_RKNN2>,

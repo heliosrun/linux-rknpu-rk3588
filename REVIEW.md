@@ -162,6 +162,32 @@ iommu-enabled poll stub, both used by rknpu_drv.c.
 - boot.kernelModules = [ "rknpu" ] is host-scoped (cm3588 only); a
   probe failure logs but cannot break boot.
 
+## FIELD FINDING (2026-10-08, first hardware deploy): 600 MHz hard-lock
+
+The first deploy shipped assigned-clock-rates = 600 MHz with the
+review's own "confirm stability" caveat unactioned. Result: the board
+hard-locked AT PROBE - no ping, no SSH, nothing in the network stack.
+Mechanism (per the rockchip-npu-notes firmware finding): the SCMI
+clock path programs the PLL only; nothing raises vdd_npu; a raised
+rate without a matching voltage is V/f-marginal and hard-locks (their
+900 MHz case; ours at 600 MHz with an unverified rail). The lock hits
+at assigned-clock-rates application (early probe), BEFORE the network
+comes up, so the box vanishes off the network entirely.
+
+Recovery: physical power cycle (the box is in a boot loop - the boot
+default is the locked generation). On the serial console or after a
+lucky cycle: fix = 200 MHz (deployed now).
+
+Also observed in the same session: the aborted probe (external abort
+mid-supplier-resume, Finding 1b's first attempt) WEDGED THE REBOOT
+PATH - `reboot` hung with pings up until the systemd shutdown
+watchdog (RebootWatchdogSec, default 10 min) hard-reset the board.
+Both artifacts disappear with the non-iommu overlay + 200 MHz.
+
+Lesson, stated plainly: the review flagged the voltage coupling as
+the top open item and the deploy shipped 600 MHz anyway. The
+HARDWARE REVIEW comments in DT/files are blockers, not suggestions.
+
 ## Open items (hardware or owner decisions)
 
 1. 600 MHz assigned-clock-rates: sets rate only; nothing sets the NPU
