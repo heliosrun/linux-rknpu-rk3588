@@ -150,6 +150,53 @@ iommu-enabled poll stub, both used by rknpu_drv.c.
    dead code - the live port surface is the common wrappers plus the
    struct layout.
 
+## Headless rollback options (researched 2026-10-08)
+
+The CM3588 production box is headless with no practical U-Boot menu
+access, so "pick the old generation from the boot menu" is not an
+available recovery path. Options checked against the NixOS wiki,
+manual and community sources:
+
+1. **Canary/confirmator rollback (recommended; deployed)** - the
+   /etc guard described above. This is the manual equivalent of
+   deploy-rs "magic rollback", which is a documented serokell
+   feature: it connects after profile activation to confirm the
+   machine is still reachable and instructs the node to roll back
+   automatically otherwise. If remote deploys are ever adopted
+   (deploy-rs/colmena), the guard becomes redundant - the tool
+   provides it natively.
+2. **nixos-rebuild test** (NixOS manual, "what happens during a
+   system switch"): switch-to-configuration test activates a
+   configuration on the RUNNING system without touching the boot
+   loader. Safe live validation of the module and tools; cannot test
+   the DTB (needs reboot).
+3. **switch-to-configuration boot on an arbitrary generation link**
+   (discourse): /nix/var/nix/profiles/system-N-link/bin/
+   switch-to-configuration boot sets ANY past generation as the boot
+   default, remotely, without switching. Useful to flip the default
+   back to the old generation after a green test, or as the
+   guard-rollback primitive (the guard uses the --rollback variant).
+4. **kexec rehearsal** (discourse, benaryorg; nixos-anywhere ships a
+   kexec test): kexec -l the new kernel+initrd (+ --dtb on arm64)
+   from the built toplevel and kexec -e, WITHOUT touching the boot
+   loader. If the test system hangs, power-cycling lands in the
+   untouched bootloader default (old system). This is the only
+   pattern that rehearses "does this kernel+DTB boot at all"
+   headlessly. Caveats: verify kexec on the 7.2 kernel/arm64 first,
+   and note it consumes kernel+initrd memory temporarily.
+5. **systemd runtime watchdog** (systemd.runtimeWatchdogSec):
+   catches runtime hangs after deploy, not pre-systemd boot hangs.
+6. **Out-of-band management** (discourse thread caveat): PiKVM/
+   IPMI-class devices remove the headless constraint entirely - the
+   only full solution to a pre-systemd boot failure.
+
+Applicability to this deploy: the guard (1) covers boots-but-broken;
+(2) and (4) shrink the residual "does not boot at all" risk by
+rehearsing kexec and module-loadability before the reboot; (5) and
+(6) are hardening beyond this change's scope. The DTB delta is
+NPU-leaf-nodes only and the kernel binary is unchanged, so the
+residual risk is small - but (6) is the only complete answer.
+
 ## Hardware bring-up checklist (in order)
 
 1. Deploy, check dmesg for "rknpu iommu is enabled, using iommu mode".
