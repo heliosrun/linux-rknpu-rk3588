@@ -3,8 +3,10 @@
 # resulting tree: vendor node present, rocket cores off, IOMMUs on.
 # Usage: check-dt-overlay.sh <linux-dir> <overlay-dts> [jobs]
 set -euo pipefail
-LINUX_DIR="${1:?usage: check-dt-overlay.sh <linux-dir> <overlay-dts> [jobs]}"
-OVERLAY_DTS="${2:?usage: check-dt-overlay.sh <linux-dir> <overlay-dts> [jobs]}"
+# Absolutize first: relative paths would break after the cd below
+# (INC is computed from LINUX_DIR and consumed from inside it).
+LINUX_DIR="$(cd "${1:?usage: check-dt-overlay.sh <linux-dir> <overlay-dts> [jobs]}" && pwd)"
+OVERLAY_DTS="$(cd "$(dirname "${2:?usage: check-dt-overlay.sh <linux-dir> <overlay-dts> [jobs]}")" && pwd)/$(basename "${2}")"
 JOBS="${3:-$(nproc)}"
 DTC=$(command -v dtc)
 FDTOVERLAY=$(command -v fdtoverlay)
