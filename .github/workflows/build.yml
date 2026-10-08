@@ -8,12 +8,14 @@ on:
       - driver/**
       - linux-integration/**
       - nix/overlay.dts
+      - scripts/**
       - .github/workflows/build.yml
   pull_request:
     paths:
       - driver/**
       - linux-integration/**
       - nix/overlay.dts
+      - scripts/**
       - .github/workflows/build.yml
 
 # Prevent concurrent runs from fighting over the cache and the runner pool.
@@ -32,6 +34,9 @@ jobs:
   build-arm64:
     runs-on: blacksmith-8vcpu-ubuntu-2404-arm
     timeout-minutes: 360
+    if: >-
+      github.event_name == 'pull_request'
+      || !contains(toJSON(github.event.commits), '[skip ci]')
     steps:
       - name: Checkout this repo (driver/, nix/, linux-integration/)
         uses: useblacksmith/checkout@25227e61ff9dafe400e22fa487b673eac4e4409a # v1
@@ -87,77 +92,16 @@ jobs:
       # modules pass needs vmlinux.symvers (built-in symbol exports) for
       # its modpost, and produces Module.symvers for our external link.
       - name: Build pristine kernel (vmlinux + modules)
-        run: |
-          cd linux
-          make ARCH=arm64 O=build defconfig
-          make ARCH=arm64 O=build CC="ccache gcc" -j"${{ env.BUILD_JOBS }}" all
-          ls -la build/Module.symvers build/vmlinux
+        run: ./rknpu/scripts/build-kernel.sh linux "${{ env.BUILD_JOBS }}"
 
-      - name: Build rknpu module (out-of-tree)
-        run: |
-          cd linux
-          make ARCH=arm64 O=build CC="ccache gcc" -j"${{ env.BUILD_JOBS }}" M="${{ github.workspace }}/rknpu/driver" modules
-          ls -la "${{ github.workspace }}/rknpu/driver/rknpu.ko"
-
-      - name: Verify rknpu.ko
-        run: |
-          cd rknpu/driver
-          echo "=== modinfo ==="
-          modinfo rknpu.ko | head -30
-          echo "=== vermagic ==="
-          modinfo -F vermagic rknpu.ko
-          echo "=== undefined symbols: $(nm rknpu.ko | grep -c ' U ') ==="
+      - name: Build and verify rknpu module (out-of-tree)
+        run: ./rknpu/scripts/build-module.sh linux "${{ github.workspace }}/rknpu/driver" "${{ env.BUILD_JOBS }}"
 
       # Apply the NixOS overlay to a pristine mainline DTB: proves the
-      # overlay disables the rocket cores, enables the IOMMUs and
-      # creates the vendor node, against unmodified upstream DTs.
+      # overlay disables the rocket cores and creates the vendor node,
+      # against unmodified upstream DTs.
       - name: Check device tree overlay
-        run: |
-          DTC=$(find /usr -name dtc -type f | head -1)
-          FDTOVERLAY=$(find /usr -name fdtoverlay -type f | head -1)
-          INC="${{ github.workspace }}/linux/scripts/dtc/include-prefixes"
-          cd linux
-          gcc -E -nostdinc -I"$INC" -undef -D__DTS__ -x assembler-with-cpp \
-            "${{ github.workspace }}/rknpu/nix/overlay.dts" -o /tmp/overlay-pp.dts
-          $DTC -@ -I dts -O dtb -o /tmp/rknpu.dtbo /tmp/overlay-pp.dts
-          BASE=build/arch/arm64/boot/dts/rockchip/rk3588-friendlyelec-cm3588-nas.dtb
-          # -@ so the DTB carries __symbols__: our label-based overlay
-          # (same file the NixOS deviceTree machinery applies) needs it.
-          # Full dtbs tree (~2 min warm): single-file targets are
-          # not addressable (kbuild prepends the dts dir and doubles the
-          # path) and directory targets are no-ops. Do not "optimize".
-          make ARCH=arm64 O=build DTC_FLAGS="-@" -j"${{ env.BUILD_JOBS }}" dtbs
-          $FDTOVERLAY -i "$BASE" -o /tmp/board-applied.dtb /tmp/rknpu.dtbo
-
-          # Path-based assertions via fdtget: no decompile, no labels,
-          # works with any dtc version.
-          FDTGET=$(find /usr -name fdtget -type f | head -1)
-          check() {
-            got=$($FDTGET /tmp/board-applied.dtb "$1" "$2")
-            if [ "$got" != "$3" ]; then
-              echo "FAIL: $1 $2: got '"$got"', want '$3'"
-              exit 1
-            fi
-            echo "ok: $1 $2 = $got"
-          }
-          check /rknpu@fdab0000 status okay
-          check /rknpu@fdab0000 compatible rockchip,rk3588-rknpu
-          check /rknpu@fdab0000 assigned-clock-rates 600000000
-          # exactly ONE iommu: the merged 4-window device. (A 3-phandle
-          # list would only program the last-xlate MMU - see REVIEW.md.)
-          iommus=$($FDTGET /tmp/board-applied.dtb /rknpu@fdab0000 iommus)
-          echo "iommus: $iommus"
-          [ "$(echo $iommus | wc -w)" = "1" ] || { echo "FAIL: want 1 iommu"; exit 1; }
-          check /rknpu-mmu@fdab9000 status okay
-          # compatible is a 2-string list; assert via decompile instead
-          $DTC -I dtb -O dts /tmp/board-applied.dtb 2>/dev/null | grep -A3 "rknpu-mmu@fdab9000 {" | grep -q "rockchip,rk3568-iommu" && echo "ok: mmu compatible has rk3568-iommu fallback"
-          check /npu@fdab0000 status disabled
-          check /npu@fdac0000 status disabled
-          check /npu@fdad0000 status disabled
-          check /iommu@fdab9000 status disabled
-          check /iommu@fdaca000 status disabled
-          check /iommu@fdada000 status disabled
-          echo "ALL DT CHECKS PASSED"
+        run: ./rknpu/scripts/check-dt-overlay.sh linux "${{ github.workspace }}/rknpu/nix/overlay.dts" "${{ env.BUILD_JOBS }}"
 
       - name: Save ccache
         if: always()
