@@ -1,9 +1,21 @@
 # linux-rknpu-rk3588
 
 GPL-2.0 Rockchip RKNPU NPU driver (vendor **v0.9.8**, from
-[armbian/linux-rockchip rk-6.1-rkr6.1](https://github.com/armbian/linux-rockchip/tree/rk-6.1-rkr6.1/drivers/rknpu),
-byte-identical to rockchip-linux develop-6.1), ported to mainline
-kernels (verified against 7.2). No vendor blobs: kernel source only.
+[armbian/linux-rockchip rk-6.1-rkr6.1](https://github.com/armbian/linux-rockchip/tree/82c6b3ef1c935064d4aa87f698412fdc37a4435f/drivers/rknpu)
+at pinned commit `82c6b3e` (2026-03-04), byte-identical to
+rockchip-linux develop-6.1), ported to mainline kernels (verified
+against 7.2). No vendor blobs: kernel source only.
+
+Reviewing the port against its source:
+
+- [Full port diff (GitHub compare)](https://github.com/heliosrun/linux-rknpu-rk3588/compare/vendor/v0.9.8...diff/vendor-v0.9.8) -
+  every change vs pristine vendor, file by file. The `vendor/v0.9.8`
+  branch holds the unmodified source; `diff/vendor-v0.9.8` is a
+  no-op merge anchoring the compare (unrelated histories cannot be
+  compared directly). Refresh it with `git merge -s ours main` on
+  that branch after main moves.
+- Locally: `git diff vendor/v0.9.8...diff/vendor-v0.9.8 -- driver/`
+  after fetching both branches.
 
 ## Layout
 
