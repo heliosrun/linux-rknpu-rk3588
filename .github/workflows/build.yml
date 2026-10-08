@@ -123,9 +123,10 @@ jobs:
           BASE=build/arch/arm64/boot/dts/rockchip/rk3588-friendlyelec-cm3588-nas.dtb
           # -@ so the DTB carries __symbols__: our label-based overlay
           # (same file the NixOS deviceTree machinery applies) needs it.
-          # Single board target only: the full dtbs/ tree is ~600 files
-          # for one assertion set.
-          make ARCH=arm64 O=build DTC_FLAGS="-@" -j"${{ env.BUILD_JOBS }}" arch/arm64/boot/dts/rockchip/rk3588-friendlyelec-cm3588-nas.dtb
+          # Rockchip dir only (~40 boards): kbuild prepends the dts
+          # dir to bare file targets, so single-file paths are not
+          # addressable here; the full dtbs/ tree would be ~600 files.
+          make ARCH=arm64 O=build DTC_FLAGS="-@" -j"${{ env.BUILD_JOBS }}" arch/arm64/boot/dts/rockchip/
           $FDTOVERLAY -i "$BASE" -o /tmp/board-applied.dtb /tmp/rknpu.dtbo
 
           # Path-based assertions via fdtget: no decompile, no labels,
