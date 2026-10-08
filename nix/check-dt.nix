@@ -66,16 +66,23 @@ stdenv.mkDerivation {
     check /rknpu@fdab0000 status okay
     check /rknpu@fdab0000 compatible rockchip,rk3588-rknpu
     check /rknpu@fdab0000 assigned-clock-rates 600000000
-    check /rknpu-mmu@fdab9000 status okay
+    # Non-IOMMU mode: the node must have NO iommus property and the
+    # merged mmu device must not exist (the mainline rockchip-iommu
+    # driver cannot drive the 4-window device - see overlay.dts).
+    if fdtget "$OUT" /rknpu@fdab0000 iommus >/dev/null 2>&1; then
+      echo "FAIL: iommus present but non-iommu mode expected"; exit 1
+    fi
+    echo "ok: /rknpu@fdab0000 has no iommus (non-iommu mode)"
+    if fdtget "$OUT" /rknpu-mmu@fdab9000 status >/dev/null 2>&1; then
+      echo "FAIL: merged rknpu-mmu node exists"; exit 1
+    fi
+    echo "ok: no merged rknpu-mmu node"
     check /npu@fdab0000 status disabled
     check /npu@fdac0000 status disabled
     check /npu@fdad0000 status disabled
     check /iommu@fdab9000 status disabled
     check /iommu@fdaca000 status disabled
     check /iommu@fdada000 status disabled
-    iommus=$(fdtget "$OUT" /rknpu@fdab0000 iommus)
-    echo "iommus: $iommus"
-    [ "$(echo $iommus | wc -w)" = "1" ] || { echo "FAIL: want 1 iommu"; exit 1; }
     echo "ALL DT CHECKS PASSED"
 
     mkdir -p $out

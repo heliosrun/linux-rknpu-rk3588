@@ -31,26 +31,64 @@ three cores, so most jobs would fail - after a completely
 healthy-looking probe (rknpu_is_iommu_enable only checks DT
 availability).
 
-Fix applied: single rknpu-mmu@fdab9000 device with all four register
-windows (BSP layout), iommus = <&rknpu_mmu>. Mainline rockchip-iommu
-binds it via the rk3568-iommu compatible, counts num_mmu = 4 from the
-resources, and its enable/disable loops program every window.
-dma_bit_mask for the v2 ops is 40-bit, matching the driver.
+FIRST fix attempt (WRONG, see Finding 1b): single rknpu-mmu@fdab9000
+device with all four register windows (BSP layout), iommus =
+<&rknpu_mmu>, reasoning that mainline rockchip-iommu counts num_mmu =
+4 from the resources and programs every window.
 
-Clocks on that node are deliberately ABSENT. Mainline rockchip-iommu
-bulk-gets exactly "aclk"/"iface"; any other name set fails probe with
--EINVAL (a missing clock name resolves to -EINVAL in
-of_parse_clkspec, not the tolerated -ENOENT), while a missing clocks
-property is tolerated (num_clocks = 0). Probe, attach
-(pm_runtime_get_if_in_use returns 0 while suspended: records the
-domain, touches no registers) and all runtime register writes are
-therefore sequenced by the NPU driver itself, which enables its own 8
-clocks (the same physical gates) in rknpu_power_on BEFORE its
-pm_runtime_get_sync() can trigger the mmu resume that programs the
-DTEs. Verified by reading the call order in rknpu_drv.c.
+## Finding 1b (HIGH, fixed on hardware 2026-10-08): the merged 4-window
+device cannot work with the mainline iommu driver at all
 
-Residual: system-sleep suspend ordering (mmu rk_iommu_disable writes
-vs NPU clock disable) is untested. Test a sleep/wake cycle on
+Hardware evidence (CM3588, first boot of the deployed generation):
+
+    rknpu: loading out-of-tree module taints kernel.
+    Internal error: synchronous external abort 0000000096000010
+    pc : rk_iommu_enable_stall+0x28/0x1e0
+    lr : rk_iommu_enable+0x58/0x3e0
+    ... pm_runtime_get_suppliers ... driver_probe_device ...
+    rknpu_init+0x30/0x48 [rknpu]
+
+Decode: module load -> driver_register -> the driver core probes the
+vendor node -> pm_runtime_get_suppliers runtime-resumes the IOMMU
+(supplier device link) -> rk_iommu_resume -> rk_iommu_enable ->
+clk_bulk_enable over ZERO clocks (the node had none - see the wrong
+rationale below) -> enable_stall reads RK_MMU_STATUS through gated
+windows -> synchronous external abort. The probe dies; no device
+nodes; the system survives (confirmed: boot completed, smoke test ran).
+
+The "no clocks" rationale was wrong on sequencing: the supplier
+resume happens BEFORE the rknpu driver probe function, so
+rknpu_power_on (which enables the same physical gates) cannot have
+run yet.
+
+Deeper problem: even WITH clocks, the mainline driver bulk-gets
+exactly TWO ("aclk"/"iface") while the four windows span three
+cores' gate domains (BSP: six gates aclk0-2/iface0-2). enable_stall
+reads every window; windows 2/3 would abort with only core 0's gates
+up. The merged device cannot work without per-window clock support in
+the mainline driver.
+
+And the 3-separate-node shape cannot work either (Finding 1: one
+domain on the last-xlate MMU only - silent corruption on the other
+two cores, worse than a loud abort).
+
+FINAL fix: NON-IOMMU MODE. The vendor node carries no iommus property
+at all; the driver's own supported fallback runs with physical DMA
+addresses ("using non-iommu mode"). Trade-off: no DMA isolation for
+the NPU (acceptable: single-tenant ML appliance, vendor-maintained
+driver). Bonus: the 4 GB shared-domain IOVA window and its leak
+behavior (see cross-validation) disappear - physical addressing with
+the 40-bit mask covers all RAM. The proper long-term fix is per-window
+clock support in the mainline rockchip-iommu driver (upstreamable);
+revisit iommu mode then.
+
+(For the record, the earlier sequencing claim - "initial attach is
+deferred while the mmu is runtime-suspended" - was also wrong:
+pm_runtime_get_suppliers in the probe path resumes the supplier
+directly, deferral notwithstanding.)
+
+Residual: system-sleep suspend ordering is untested. Test a
+sleep/wake cycle on
 hardware; headless servers rarely sleep, so this is noted, not
 blocking.
 

@@ -1,7 +1,16 @@
 /* SPDX-License-Identifier: GPL-2.0
- * Vendor RKNPU nodes for in-tree builds - add to rk3588-base.dtsi.
+ * Vendor RKNPU node for in-tree builds - add to rk3588-base.dtsi.
  * Mutually exclusive with the rocket nodes (same MMIO): both default
- * to disabled. Unique node names avoid clashing with npu@fdab0000. */
+ * to disabled. Unique node names avoid clashing with npu@fdab0000.
+ *
+ * NON-IOMMU MODE: no iommus property, on purpose. The RK3588 NPU
+ * IOMMU is one device with four windows across three cores' clock
+ * domains (BSP: six gates); the mainline rockchip-iommu driver
+ * bulk-gets exactly two clocks (aclk/iface) and aborts on the
+ * windows it cannot gate (observed on hardware: synchronous external
+ * abort in rk_iommu_enable_stall). Per-window clock support in the
+ * mainline driver is the proper fix; until then the vendor driver's
+ * own non-iommu mode (physical DMA) is used. */
 	rknpu: rknpu@fdab0000 {
 		compatible = "rockchip,rk3588-rknpu";
 		reg = <0x0 0xfdab0000 0x0 0x10000>,
@@ -31,24 +40,5 @@
 				<&power RK3588_PD_NPU1>,
 				<&power RK3588_PD_NPU2>;
 		power-domain-names = "npu0", "npu1", "npu2";
-		iommus = <&rknpu_mmu>;
-		status = "disabled";
-	};
-	rknpu_mmu: rknpu-mmu@fdab9000 {
-		compatible = "rockchip,rk3588-iommu", "rockchip,rk3568-iommu";
-		reg = <0x0 0xfdab9000 0x0 0x100>,
-		      <0x0 0xfdaba000 0x0 0x100>,
-		      <0x0 0xfdaca000 0x0 0x100>,
-		      <0x0 0xfdada000 0x0 0x100>;
-		interrupts = <GIC_SPI 110 IRQ_TYPE_LEVEL_HIGH 0>,
-			     <GIC_SPI 111 IRQ_TYPE_LEVEL_HIGH 0>,
-			     <GIC_SPI 112 IRQ_TYPE_LEVEL_HIGH 0>;
-		interrupt-names = "npu0_mmu", "npu1_mmu", "npu2_mmu";
-		/* NOTE: no clocks: mainline rockchip-iommu bulk-gets
-		 * exactly "aclk"/"iface"; any other name set fails probe
-		 * with -EINVAL, while a missing clocks property is
-		 * tolerated (-ENOENT -> unmanaged). The NPU driver enables
-		 * these gates itself before first use. */
-		#iommu-cells = <0>;
 		status = "disabled";
 	};

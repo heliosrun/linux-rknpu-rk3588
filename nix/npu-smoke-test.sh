@@ -26,10 +26,10 @@ else
 fi
 
 if dmesg >/dev/null 2>&1; then
-  if dmesg | grep -qi "using iommu mode"; then
-    pass "driver reports iommu mode"
-  elif dmesg | grep -qi "non-iommu mode"; then
-    oops "driver in non-iommu mode (DT overlay not applied?)"
+  if dmesg | grep -qi "non-iommu mode"; then
+    pass "driver reports non-iommu mode (expected: overlay has no iommus)"
+  elif dmesg | grep -qi "using iommu mode"; then
+    oops "driver in iommu mode (overlay unexpectedly carries iommus)"
   else
     oops "no rknpu iommu-mode line in dmesg"
   fi
@@ -43,14 +43,9 @@ for g in /sys/kernel/iommu_groups/*/devices/*fdab0000*; do
   grp=$(echo "$g" | cut -d/ -f5)
 done
 if [ -z "$grp" ]; then
-  oops "fdab0000.npu in no IOMMU group (no IOMMU bound?)"
+  pass "fdab0000.npu in no IOMMU group (non-iommu mode: expected)"
 else
-  ndev=$(ls /sys/kernel/iommu_groups/$grp/devices | wc -l | tr -d " ")
-  if [ "$ndev" = "1" ]; then
-    pass "iommu group $grp holds exactly the rknpu device"
-  else
-    oops "iommu group $grp holds $ndev devices (want 1)"
-  fi
+  note "fdab0000.npu in iommu group $grp (unexpected with this overlay; informational)"
 fi
 
 if [ -r /sys/kernel/debug/clk/clk_summary ]; then
