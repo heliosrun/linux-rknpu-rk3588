@@ -44,12 +44,11 @@
 			     <GIC_SPI 111 IRQ_TYPE_LEVEL_HIGH 0>,
 			     <GIC_SPI 112 IRQ_TYPE_LEVEL_HIGH 0>;
 		interrupt-names = "npu0_mmu", "npu1_mmu", "npu2_mmu";
-		clocks = <&cru ACLK_NPU0>, <&cru ACLK_NPU1>,
-			 <&cru ACLK_NPU2>,
-			 <&cru HCLK_NPU0>, <&cru HCLK_NPU1>,
-			 <&cru HCLK_NPU2>;
-		clock-names = "aclk0", "aclk1", "aclk2",
-			      "iface0", "iface1", "iface2";
+		/* NOTE: no clocks: mainline rockchip-iommu bulk-gets
+		 * exactly "aclk"/"iface"; any other name set fails probe
+		 * with -EINVAL, while a missing clocks property is
+		 * tolerated (-ENOENT -> unmanaged). The NPU driver enables
+		 * these gates itself before first use. */
 		#iommu-cells = <0>;
 		status = "disabled";
 	};

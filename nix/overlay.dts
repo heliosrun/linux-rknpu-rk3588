@@ -10,15 +10,34 @@
 /*
  * Rockchip RKNPU (vendor v0.9.8 driver) for RK3588 on mainline kernels.
  *
- * Labels rknn_core_* / rknn_mmu_* come from the base device tree's
- * __symbols__ table (mainline rocket nodes). The rocket driver owns the
- * same MMIO when its cores are enabled, so they are switched off here
- * and the vendor node is created instead. The per-core IOMMU nodes are
- * enabled so the mainline rockchip-iommu driver (CONFIG_ROCKCHIP_IOMMU)
- * binds them; the rknpu device lists all three in its iommus property,
- * which merges them into one IOMMU group with a single shared default
- * DMA domain - exactly what the driver's out-of-GKI DMA path expects.
+ * IOMMU TOPOLOGY - READ THIS BEFORE TOUCHING IT. The RK3588 NPU block
+ * has three cores behind IOMMU windows at fdab9000, fdaba000, fdaca000
+ * and fdada000. The vendor driver is a SINGLE platform device whose DMA
+ * path maps into ONE domain (iommu_get_domain_for_dev). The mainline
+ * rockchip-iommu driver programs the windows of exactly the iommu
+ * device the platform device is attached to (rk_iommu_from_dev follows
+ * the of_xlate private pointer, and generic_single_device_group gives
+ * that same instance's group). Listing three separate per-core mmu
+ * nodes in iommus therefore programs only ONE of the three MMUs and
+ * leaves the other two cores faulting. The BSP-faithful shape used
+ * here is a SINGLE iommu device with all four register windows, so one
+ * attach programs every core's MMU.
+ *
+ * Clocks: intentionally ABSENT. Mainline rockchip-iommu bulk-gets
+ * exactly "aclk"/"iface"; any other name set fails probe with -EINVAL,
+ * while a missing clocks property is tolerated (-ENOENT -> unmanaged).
+ * The NPU driver enables these same gates (aclk0-2/hclk0-2) itself in
+ * rknpu_power_on BEFORE its pm_runtime_get_sync can trigger the mmu
+ * resume that programs the DTEs, and initial attach is deferred while
+ * the mmu is runtime-suspended. Unmanaged is correct here.
+ *
+ * The mainline rocket (accel) driver owns the same MMIO when its cores
+ * are enabled, so they are switched off below.
  */
+
+/ {
+	compatible = "rockchip,rk3588";
+};
 
 &rknn_core_0 {
 	status = "disabled";
@@ -32,19 +51,35 @@
 	status = "disabled";
 };
 
+/* The per-core rocket IOMMUs serve only the disabled cores above;
+ * keep them off so nothing binds the same MMIO windows. */
 &rknn_mmu_0 {
-	status = "okay";
+	status = "disabled";
 };
 
 &rknn_mmu_1 {
-	status = "okay";
+	status = "disabled";
 };
 
 &rknn_mmu_2 {
-	status = "okay";
+	status = "disabled";
 };
 
 &{/} {
+	rknpu_mmu: rknpu-mmu@fdab9000 {
+		compatible = "rockchip,rk3588-iommu", "rockchip,rk3568-iommu";
+		reg = <0x0 0xfdab9000 0x0 0x100>,
+		      <0x0 0xfdaba000 0x0 0x100>,
+		      <0x0 0xfdaca000 0x0 0x100>,
+		      <0x0 0xfdada000 0x0 0x100>;
+		interrupts = <GIC_SPI 110 IRQ_TYPE_LEVEL_HIGH 0>,
+			     <GIC_SPI 111 IRQ_TYPE_LEVEL_HIGH 0>,
+			     <GIC_SPI 112 IRQ_TYPE_LEVEL_HIGH 0>;
+		interrupt-names = "npu0_mmu", "npu1_mmu", "npu2_mmu";
+		#iommu-cells = <0>;
+		status = "okay";
+	};
+
 	rknpu: rknpu@fdab0000 {
 		compatible = "rockchip,rk3588-rknpu";
 		reg = <0x0 0xfdab0000 0x0 0x10000>,
@@ -65,8 +100,9 @@
 			      "hclk2", "pclk";
 		assigned-clocks = <&scmi_clk SCMI_CLK_NPU>;
 		/* BSP default is 200 MHz; 600 MHz is the practical fixed
-		 * rate used for RK3588 NPU bring-up. Adjust here if the
-		 * SCMI clock rejects it. */
+		 * rate used for RK3588 NPU bring-up. HARDWARE REVIEW: this
+		 * sets rate only - nothing sets the NPU rail voltage, so
+		 * confirm stability on the board before raising it. */
 		assigned-clock-rates = <600000000>;
 		resets = <&cru SRST_A_RKNN0>, <&cru SRST_A_RKNN1>,
 			 <&cru SRST_A_RKNN2>,
@@ -78,7 +114,7 @@
 				<&power RK3588_PD_NPU1>,
 				<&power RK3588_PD_NPU2>;
 		power-domain-names = "npu0", "npu1", "npu2";
-		iommus = <&rknn_mmu_0>, <&rknn_mmu_1>, <&rknn_mmu_2>;
+		iommus = <&rknpu_mmu>;
 		status = "okay";
 	};
 };

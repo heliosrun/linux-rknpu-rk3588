@@ -22,13 +22,18 @@ struct opp_table;
 
 /*
  * Minimal stand-ins for the vendor soc/rockchip OPP/monitor framework
- * (rockchip_opp_select.h et al.), used only by the excluded
- * rknpu_devfreq.o... except rknpu_devfreq.o IS built (PM_DEVFREQ is on
- * in any realistic config: Panthor selects it). So these must satisfy
- * the real call sites in rknpu_devfreq.c. Every stub below fails safe:
- * OPP table init fails -> rknpu_devfreq_init() returns -EINVAL -> probe
- * ignores it -> fixed clock, devfreq stays NULL, runtime paths no-op
- * on the zeroed state. DVFS via the vendor OPP stack is future work.
+ * (rockchip_opp_select.h et al.).
+ *
+ * NOTE: none of this is compiled today. The only consumer would be
+ * rknpu_devfreq.c, which is EXCLUDED from both the in-tree and the
+ * out-of-tree builds (see rknpu_devfreq_stub.c instead). These types
+ * and stubs exist so a future DVFS port has the shapes ready, and so
+ * struct rknpu_device (which embeds struct rockchip_opp_info) lays
+ * out identically if devfreq support is ever re-enabled. The live
+ * devfreq contract is the six no-op rknpu_devfreq_*() definitions in
+ * rknpu_devfreq_stub.c, whose return-0 semantics are REQUIRED: the
+ * driver calls pm_runtime_get_sync() on itself during power-on, so a
+ * -EOPNOTSUPP from the runtime callbacks would fail probe.
  */
 struct rockchip_opp_info {
 	const struct rockchip_opp_data *data;

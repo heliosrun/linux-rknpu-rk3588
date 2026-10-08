@@ -130,15 +130,20 @@ jobs:
           check /rknpu@fdab0000 status okay
           check /rknpu@fdab0000 compatible rockchip,rk3588-rknpu
           check /rknpu@fdab0000 assigned-clock-rates 600000000
+          # exactly ONE iommu: the merged 4-window device. (A 3-phandle
+          # list would only program the last-xlate MMU - see REVIEW.md.)
           iommus=$($FDTGET /tmp/board-applied.dtb /rknpu@fdab0000 iommus)
           echo "iommus: $iommus"
-          [ "$(echo $iommus | wc -w)" = "3" ] || { echo "FAIL: want 3 iommus"; exit 1; }
+          [ "$(echo $iommus | wc -w)" = "1" ] || { echo "FAIL: want 1 iommu"; exit 1; }
+          check /rknpu-mmu@fdab9000 status okay
+          # compatible is a 2-string list; assert via decompile instead
+          $DTC -I dtb -O dts /tmp/board-applied.dtb 2>/dev/null | grep -A3 "rknpu-mmu@fdab9000 {" | grep -q "rockchip,rk3568-iommu" && echo "ok: mmu compatible has rk3568-iommu fallback"
           check /npu@fdab0000 status disabled
           check /npu@fdac0000 status disabled
           check /npu@fdad0000 status disabled
-          check /iommu@fdab9000 status okay
-          check /iommu@fdaca000 status okay
-          check /iommu@fdada000 status okay
+          check /iommu@fdab9000 status disabled
+          check /iommu@fdaca000 status disabled
+          check /iommu@fdada000 status disabled
           echo "ALL DT CHECKS PASSED"
 
       - name: Save ccache
