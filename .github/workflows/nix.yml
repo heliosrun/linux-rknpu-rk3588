@@ -25,14 +25,14 @@ jobs:
             accept-flake-config = true
 
       - name: Build rknpu module (out-of-tree vs nixpkgs linuxPackages_latest)
-        run: nix build -L .#packages.aarch64-linux.rknpu
+        run: nix build -L .#packages.aarch64-linux.rknpu -o result-module
 
       - name: Check device tree overlay (nixpkgs kernel DTBs)
-        run: nix build -L .#checks.aarch64-linux.device-tree
+        run: nix build -L .#checks.aarch64-linux.device-tree -o result-dtcheck
 
       - name: Verify vermagic
         run: |
-          KO=$(find result/lib/modules -name rknpu.ko)
+          KO=$(find result-module/lib/modules -name rknpu.ko)
           echo "module: $KO"
           objdump -s -j .modinfo "$KO" | tail -4
 
@@ -44,4 +44,5 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
           path: |
-            result/lib/modules/**/rknpu.ko
+            result-module/lib/modules/**/rknpu.ko
+            result-dtcheck/board-applied.dtb
