@@ -2,6 +2,10 @@ name: Nix build
 
 on:
   workflow_dispatch:
+  # Weekly drift detection: scheduled runs ignore paths filters, so this
+  # exercises the port against whatever linuxPackages_latest has become.
+  schedule:
+    - cron: "0 6 * * 1"
   push:
     branches: [ main ]
     paths:
@@ -26,13 +30,18 @@ jobs:
     timeout-minutes: 360
     steps:
       - name: Checkout
-        uses: useblacksmith/checkout@v1
+        uses: useblacksmith/checkout@25227e61ff9dafe400e22fa487b673eac4e4409a # v1
 
       - name: Install nix
-        uses: DeterminateSystems/nix-installer-action@v16
+        uses: DeterminateSystems/nix-installer-action@e50d5f73bfe71c2dd0aa4218de8f4afa59f8f81d # v16
         with:
           extra-conf: |
             accept-flake-config = true
+
+      # Fast eval gate: catches flake structural errors (e.g.
+      # untracked files, bad attrs) in seconds, before any building.
+      - name: Evaluate flake
+        run: nix flake check --no-build --print-build-logs
 
       - name: Build rknpu module (out-of-tree vs nixpkgs linuxPackages_latest)
         run: nix build -L .#packages.aarch64-linux.rknpu -o result-module
@@ -48,7 +57,7 @@ jobs:
 
       - name: Store artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: rknpu-nix-${{ github.sha }}
           if-no-files-found: warn
