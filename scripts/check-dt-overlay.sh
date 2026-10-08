@@ -35,14 +35,19 @@ check() {
 check /rknpu@fdab0000 status okay
 check /rknpu@fdab0000 compatible rockchip,rk3588-rknpu
 check /rknpu@fdab0000 assigned-clock-rates 600000000
-# exactly ONE iommu: the merged 4-window device. (A 3-phandle
-# list would only program the last-xlate MMU - see REVIEW.md.)
-iommus=$($FDTGET /tmp/board-applied.dtb /rknpu@fdab0000 iommus)
-echo "iommus: $iommus"
-[ "$(echo $iommus | wc -w)" = "1" ] || { echo "FAIL: want 1 iommu"; exit 1; }
-check /rknpu-mmu@fdab9000 status okay
-# compatible is a 2-string list; assert via decompile instead
-$DTC -I dtb -O dts /tmp/board-applied.dtb 2>/dev/null | grep -A3 "rknpu-mmu@fdab9000 {" | grep -q "rockchip,rk3568-iommu" && echo "ok: mmu compatible has rk3568-iommu fallback"
+# Non-IOMMU mode: the node must have NO iommus property and the
+# merged mmu device must not exist (the mainline rockchip-iommu
+# driver cannot drive the 4-window device - see REVIEW.md Finding 1b).
+if $FDTGET /tmp/board-applied.dtb /rknpu@fdab0000 iommus >/dev/null 2>&1; then
+  echo "FAIL: iommus present but non-iommu mode expected"
+  exit 1
+fi
+echo "ok: /rknpu@fdab0000 has no iommus (non-iommu mode)"
+if $FDTGET /tmp/board-applied.dtb /rknpu-mmu@fdab9000 status >/dev/null 2>&1; then
+  echo "FAIL: merged rknpu-mmu node exists"
+  exit 1
+fi
+echo "ok: no merged rknpu-mmu node"
 check /npu@fdab0000 status disabled
 check /npu@fdac0000 status disabled
 check /npu@fdad0000 status disabled
