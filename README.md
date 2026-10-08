@@ -12,6 +12,7 @@ kernels (verified against 7.2). No vendor blobs: kernel source only.
 | driver/ | the ported driver source, buildable out-of-tree |
 | nix/ | nix packaging: module derivation, NixOS module, DT overlay |
 | linux-integration/ | in-tree wiring reference (Kconfig, Makefile, vendor DT nodes) |
+| scripts/ | CI build steps as runnable scripts (kernel, module, DT check) |
 | .github/workflows/ | CI: out-of-tree build vs pristine torvalds tag + nix build |
 
 ## What the port changes (vs vendor v0.9.8)
