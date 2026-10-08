@@ -31,9 +31,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  KERNEL_REF: ${{ inputs.kernel_ref || "v7.2" }}
+  KERNEL_REF: ${{ inputs.kernel_ref || 'v7.2' }}
   CCACHE_DIR: ${{ github.workspace }}/.ccache
-  CCACHE_MAXSIZE: ${{ inputs.ccache_maxsize || "5G" }}
+  CCACHE_MAXSIZE: ${{ inputs.ccache_maxsize || '5G' }}
 
 jobs:
   build-arm64:
