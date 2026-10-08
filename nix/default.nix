@@ -27,7 +27,9 @@ in
     hardware.deviceTree.overlays = [
       {
         name = "rknpu";
-        filter = "rk3588*.dtb";
+        # NOTE: filter is a plain SUBSTRING match in
+        # apply_overlays.py, not a glob.
+        filter = "rk3588";
         dtsFile = ./overlay.dts;
       }
     ];
