@@ -158,7 +158,8 @@ available recovery path. Options checked against the NixOS wiki,
 manual and community sources:
 
 1. **Canary/confirmator rollback (recommended; deployed)** - the
-   /etc guard described above. This is the manual equivalent of
+   declarative rknpu-rollback timer in nixos-config. This is the
+   manual equivalent of
    deploy-rs "magic rollback", which is a documented serokell
    feature: it connects after profile activation to confirm the
    machine is still reachable and instructs the node to roll back
