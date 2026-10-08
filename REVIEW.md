@@ -198,19 +198,74 @@ rehearsing kexec and module-loadability before the reboot; (5) and
 NPU-leaf-nodes only and the kernel binary is unchanged, so the
 residual risk is small - but (6) is the only complete answer.
 
-## Hardware bring-up checklist (in order)
+## Deploy runbook for the production CM3588 (headless)
 
-1. Deploy, check dmesg for "rknpu iommu is enabled, using iommu mode".
-2. ls /sys/kernel/iommu_groups/*/devices | grep fdab - expect the
-   rknpu device in a group whose .../iommu_devices lists ONLY the
-   rknpu-mmu device (not three separate ones).
-3. Single-core inference (mask to core 2, then 0, then 1) with known
-   checksums before enabling all three. Note their lane-0 finding:
-   rare (~2^-16 low) per-core output deviations are deterministic per
-   input, so checksums remain stable - but they are core-specific.
-4. Multi-core soak + dmesg watch for rk_iommu_irq page faults.
-5. Sleep/wake cycle (see Finding 1 residual).
-6. Then raise to 600 MHz (see item 1) with checksum validation.
+Safety properties: the kernel binary is unchanged (out-of-tree module
+vs stock nixpkgs 7.2.9), overlay application is at build time, the
+running system is untouched until reboot, and the declarative guard
+auto-rolls back 15 minutes after boot unless cancelled. NixOS
+generations (configurationLimit = 3) keep the old system bootable.
+
+Stage 0 - deploy (on the box, in a window where an unplanned reboot
+is acceptable):
+
+    sudo nixos-rebuild switch > /tmp/rknpu-switch.log 2>&1
+    sudo modprobe rknpu && sudo rmmod rknpu   # loadability check; the
+        # running DTB has no vendor node yet, so the probe is a no-op
+    sudo reboot
+
+Stage 1 - smoke (after reboot; the guard timer is ticking):
+
+    npu-smoke-test
+
+Checks: render node bound to RKNPU, /dev/rknpu, dmesg "using iommu
+mode", IOMMU group holds exactly the rknpu device, clock lines.
+Failure map: "non-iommu mode" = overlay not applied; no render node =
+probe failed (read dmesg). If SSH is dead, the guard reverts at +15
+min automatically.
+
+Stage 2 - compute gate:
+
+    rknpu-test
+
+Ten fp16 matmul runs (tiny 4x32x16, large 64x256x256) pinned to core
+0, 1, 2 individually, then all cores. This is the Finding-1
+discriminator: unprogrammed MMUs show up here as failures on cores
+0/1. Exit 0 + "ALL RKNPU TESTS PASSED" required.
+
+Then cancel the guard and commit the marker:
+
+    sudo touch /etc/rknpu-guard-cancelled
+
+Stage 3 - soak:
+
+Multi-core jobs in a loop + dmesg -w watching for rk_iommu_irq page
+faults; a sleep/wake cycle (Finding 1 residual); confirm vdd_npu
+>= 0.70 V before trusting 600 MHz results. Only after all of this:
+re-enable the immich ML container with /dev/dri mapped.
+
+Stage 4 - raise to 600 MHz:
+
+Edit assigned-clock-rates in nix/overlay.dts (600000000 -> keep, or
+drop to 200000000 if stage 2 showed instability), rebuild, reboot,
+re-run rknpu-test. Keep the guard pattern if cautious.
+
+Cleanup after full validation:
+
+    # remove rknpuDeploy.guard.enable + the guard module import from
+    # cm3588.nix, then: sudo rm /etc/rknpu-guard-cancelled
+
+Rollback at any point before cancelling: the guard does it
+automatically at +15 min; manually via
+`sudo /run/current-system/sw/bin/nixos-rebuild switch --rollback`.
+Rollback after cancelling (i.e. days later, NPU suspected bad):
+`sudo /nix/var/nix/profiles/system-<old>-link/bin/switch-to-configuration
+boot && sudo reboot` (find <old> with
+`ls -d /nix/var/nix/profiles/system-*-link`).
+
+Optional rehearsal (shrinks the residual "does not boot at all"
+risk): kexec the built toplevel before ever rebooting - see the
+headless rollback options section above.
 
 ## External cross-validation (rockchip-npu-notes, 2026-10-08)
 
