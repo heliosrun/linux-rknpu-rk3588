@@ -2,6 +2,13 @@ name: Build RKNPU module
 
 on:
   workflow_dispatch:
+    inputs:
+      kernel_ref:
+        description: Linux tag to build against
+        default: v7.2
+      ccache_maxsize:
+        description: ccache maximum size
+        default: 5G
   push:
     branches: [ main ]
     paths:
@@ -24,11 +31,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Bump this to port-verify against a newer mainline tag.
-  KERNEL_REF: v7.2
+  KERNEL_REF: ${{ inputs.kernel_ref || "v7.2" }}
   CCACHE_DIR: ${{ github.workspace }}/.ccache
-  CCACHE_MAXSIZE: 5G
-  BUILD_JOBS: 8
+  CCACHE_MAXSIZE: ${{ inputs.ccache_maxsize || "5G" }}
 
 jobs:
   build-arm64:
@@ -89,16 +94,16 @@ jobs:
       # modules pass needs vmlinux.symvers (built-in symbol exports) for
       # its modpost, and produces Module.symvers for our external link.
       - name: Build pristine kernel (vmlinux + modules)
-        run: ./rknpu/scripts/build-kernel.sh linux "${{ env.BUILD_JOBS }}"
+        run: ./rknpu/scripts/build-kernel.sh linux
 
       - name: Build and verify rknpu module (out-of-tree)
-        run: ./rknpu/scripts/build-module.sh linux "${{ github.workspace }}/rknpu/driver" "${{ env.BUILD_JOBS }}"
+        run: ./rknpu/scripts/build-module.sh linux "${{ github.workspace }}/rknpu/driver"
 
       # Apply the NixOS overlay to a pristine mainline DTB: proves the
       # overlay disables the rocket cores and creates the vendor node,
       # against unmodified upstream DTs.
       - name: Check device tree overlay
-        run: ./rknpu/scripts/check-dt-overlay.sh linux "${{ github.workspace }}/rknpu/nix/overlay.dts" "${{ env.BUILD_JOBS }}"
+        run: ./rknpu/scripts/check-dt-overlay.sh linux "${{ github.workspace }}/rknpu/nix/overlay.dts"
 
       - name: Save ccache
         if: always()
