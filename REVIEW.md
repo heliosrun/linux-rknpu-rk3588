@@ -154,3 +154,23 @@ DT compilation/application and module compilation do not exercise
 firmware MMIO or runtime PM. The implementation must pass both existing
 CI builds and hardware validation before deployment. Source-level
 checks are useful regression guards, not substitutes for those tests.
+
+## OrangePi5Pro bug-class audit (source-level, no hardware)
+
+The mack42/OrangePi5Pro RK3588 NPU stack fixed four bug classes on its
+way to validated 800 MHz. Each was audited against this tree (DRM_GEM
+build); three do not apply here, and the fourth was already fixed:
+
+| Upstream fix | Status in this tree | Evidence |
+|---|---|---|
+| RKNPU_GET_VOLT ioctl NULL-deref on missing regulator | Already guarded | driver/rknpu_drv.c:443 returns ENODEV when vdd is NULL, with comment |
+| volt debugfs NULL-deref | Already guarded | driver/rknpu_debugger.c:261 returns before regulator_get_voltage |
+| CMA-heap probe failure (-ENOMEM, no BSP heap on mainline) | Not compiled | block lives under CONFIG_ROCKCHIP_RKNPU_DMA_HEAP (driver/rknpu_drv.c:1506); this build defines DRM_GEM only |
+| fake_dev undeclared in DMA_HEAP builds | Not applicable | field declared under DRM_GEM (include/rknpu_drv.h:117) and registered at probe; their failure was DMA_HEAP-only |
+| ioctl copy-back clobber (MEM_CREATE results overwritten) | Absent | w568w misc-handler pattern; no kdata copy-back block exists in this vendor source |
+| unguarded regulator_get_voltage in rknpu_devfreq.c | Dead code | file excluded from Kbuild; the stub object is linked instead |
+
+If this project ever builds DMA_HEAP for librknnrt, the heap-fatal
+block and the fake_dev declaration must be revisited first, with the
+mack42 patches as reference. Until then, no code change: this audit is
+recorded so a future vendor re-sync can re-check each line.
