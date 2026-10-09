@@ -64,6 +64,7 @@ check_file() {
   [ -n "$1" ] || fail "missing $2 path (see --help)"
   [ -f "$1" ] || fail "$2 not found: $1"
   [ -s "$1" ] || fail "$2 is empty: $1"
+  [ -r "$1" ] || fail "$2 not readable: $1 (run as root or fix permissions)"
   echo "ok: $2 $1"
 }
 
@@ -94,6 +95,21 @@ run_self_test() {
   echo "-- self-test: empty file rejected"
   if "$0" --dry-run --kernel "$tmp/empty" --initrd "$tmp/initrd" --dtb "$tmp/board.dtb" 2>/dev/null; then
     fail "empty kernel accepted"
+  fi
+  echo "-- self-test: unreadable file rejected with a clear message"
+  if [ "$(id -u)" = "0" ]; then
+    echo "note: running as root, readability check always passes; skipping"
+  else
+    chmod 000 "$tmp/kernel"
+    "$0" --dry-run --kernel "$tmp/kernel" --initrd "$tmp/initrd" --dtb "$tmp/board.dtb" >"$tmp/sub.log" 2>&1 || true
+    if grep -q "not readable" "$tmp/sub.log"; then
+      echo "ok: unreadable kernel rejected"
+    else
+      echo "--- sub-run output was:"
+      cat "$tmp/sub.log"
+      fail "unreadable kernel accepted"
+    fi
+    chmod 644 "$tmp/kernel"
   fi
   echo "-- self-test: missing kexec binary rejected cleanly"
   if "$0" --confirm --kernel "$tmp/kernel" --initrd "$tmp/initrd" --dtb "$tmp/board.dtb" --append "console=test" --kexec-bin /nonexistent/kexec 2>/dev/null; then
