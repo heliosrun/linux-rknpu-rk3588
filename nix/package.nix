@@ -35,7 +35,7 @@ stdenv.mkDerivation {
       GPL-2.0 Rockchip NPU driver v0.9.8 (vendor source from
       armbian/linux-rockchip rk-6.1-rkr6.1), ported to mainline 7.x:
       drm_driver/IOMMU/hrtimer API drift fixed, vendor soc/rockchip OPP
-      and monitor helpers replaced with failsafe stubs (fixed clock),
+      and monitor helpers replaced with stubs (fixed 200 MHz bring-up),
       devfreq replaced by a stub object. Built out-of-tree against the
       NixOS kernel so vermagic matches.
     '';

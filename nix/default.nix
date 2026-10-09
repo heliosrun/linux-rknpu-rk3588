@@ -12,10 +12,21 @@ in
     enable = lib.mkEnableOption ''
       the Rockchip RKNPU NPU driver: an out-of-tree kernel module
       (vendor v0.9.8 ported to mainline) plus a device tree overlay
-      enabling the vendor npu@fdab0000 node. Mutually exclusive with
-      the mainline rocket (accel) driver: the overlay also disables
+      enabling the vendor rknpu@fdab0000 node at 200 MHz. Mutually
+      exclusive with the mainline rocket (accel) driver: the overlay also disables
       the rknn_core_* nodes.
     '';
+
+    autoload = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = ''
+        Load rknpu during boot. Disable for initial headless bring-up
+        to boot the overlay first and load the module manually after
+        establishing remote access. This does not override module
+        loading requested elsewhere in the host configuration.
+      '';
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -23,7 +34,7 @@ in
       (config.boot.kernelPackages.callPackage ./package.nix { })
     ];
 
-    boot.kernelModules = [ "rknpu" ];
+    boot.kernelModules = lib.optionals cfg.autoload [ "rknpu" ];
 
     # Bring-up test tools: npu-smoke-test (stage-1 checks), rknpu-test
     # (per-core fp16 matmul sweep), matmul_fp16_rocket (raw probe).

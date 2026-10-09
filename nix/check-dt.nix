@@ -65,7 +65,8 @@ stdenv.mkDerivation {
     }
     check /rknpu@fdab0000 status okay
     check /rknpu@fdab0000 compatible rockchip,rk3588-rknpu
-    check /rknpu@fdab0000 assigned-clock-rates 600000000
+    # Clock defaults are applied with the NPU domains still off.
+    check /rknpu@fdab0000 assigned-clock-rates 200000000
     # Non-IOMMU mode: the node must have NO iommus property and the
     # merged mmu device must not exist (the mainline rockchip-iommu
     # driver cannot drive the 4-window device - see overlay.dts).

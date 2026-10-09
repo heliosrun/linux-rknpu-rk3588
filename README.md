@@ -34,17 +34,17 @@ Reviewing the port against its source:
   iommu_map/iommu_map_sg, sg_dma_is_bus_address, raw-pfn
   vmf_insert_mixed, iommu_paging_domain_alloc, inline IOVA cookie
   replication.
-- Vendor soc/rockchip OPP/monitor helpers replaced by failsafe stubs
-  (driver/rknpu_soc_compat.h): fixed-clock mode, no DVFS. OPP/DVFS
-  bring-up is future work.
+- Vendor soc/rockchip OPP/monitor helpers replaced by stubs
+  (driver/rknpu_soc_compat.h): fixed 200 MHz bring-up, no DVFS.
+  Higher rates require power-domain/voltage sequencing and a return
+  to 200 MHz before power-down; the stubs do not implement that.
 - rknpu_devfreq.o replaced by rknpu_devfreq_stub.o; rknpu_mem.o
   (DMA_HEAP) and rknpu_mm.o (SRAM) excluded.
 - DT: vendor rknpu@fdab0000 node is mutually exclusive with the
   mainline rocket (accel) cores (same MMIO). The nix overlay
-  (nix/overlay.dts) disables rocket, enables the per-core IOMMUs
-  (mainline rockchip-iommu binds them, all three merge into one IOMMU
-  group sharing a default DMA domain) and creates the node at 600 MHz
-  (BSP default is 200 MHz).
+  (nix/overlay.dts) disables rocket and its per-core IOMMUs, and
+  creates the vendor node at 200 MHz without an `iommus` property.
+  This uses physical DMA without NPU DMA isolation.
 
 ## NixOS
 
@@ -59,6 +59,37 @@ Reviewing the port against its source:
 
 The module builds out-of-tree against config.boot.kernelPackages, so
 vermagic matches whichever kernel the host uses.
+
+## Headless bring-up
+
+For the first boot, set `hardware.rknpu.autoload = false`. This
+installs the module and the 200 MHz overlay without explicitly loading
+RKNPU at boot. Ensure the host does not request the module elsewhere.
+Once SSH is available, run as root:
+
+```sh
+modprobe rknpu
+npu-smoke-test
+rknpu-test
+```
+
+The required device is the RKNPU `/dev/dri/renderD*` node. `/dev/rknpu`
+is optional in this DRM/GEM-only build. A voltage query returns
+`ENODEV` when the board's rail is managed by genpd rather than a
+regulator acquired by the driver.
+
+**Do not raise `assigned-clock-rates` above 200 MHz.** Linux applies
+clock defaults before domain attachment and driver probe; programming
+the NPU-local PVTPLL while its island is off can hang secure firmware.
+DT compilation and a successful module load against an old DTB do not
+validate this sequence. See [REVIEW.md](REVIEW.md) for source references
+and the remaining hardware validation requirements.
+
+A systemd rollback timer cannot recover a firmware hang. Have UART,
+recovery media, or another independently tested recovery path before
+rebooting a headless production board. A warm kexec is not proof of
+cold-boot safety. After validation, restore `hardware.rknpu.autoload`
+to its default (`true`) if automatic loading is wanted.
 
 ## Building manually
 

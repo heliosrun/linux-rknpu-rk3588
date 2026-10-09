@@ -29,6 +29,8 @@
 			      "hclk0", "hclk1",
 			      "hclk2", "pclk";
 		assigned-clocks = <&scmi_clk SCMI_CLK_NPU>;
+		/* Defaults run before power-up: only the 200 MHz GPLL path
+		 * is safe here. Higher rates need driver-managed sequencing. */
 		assigned-clock-rates = <200000000>;
 		resets = <&cru SRST_A_RKNN0>, <&cru SRST_A_RKNN1>,
 			 <&cru SRST_A_RKNN2>,

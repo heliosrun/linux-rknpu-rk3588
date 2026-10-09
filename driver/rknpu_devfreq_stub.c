@@ -7,7 +7,9 @@
  * vendor Rockchip OPP/monitor framework (rockchip_get_opp_data,
  * rockchip_init_opp_table, struct rockchip_opp_info handling) that has no
  * mainline equivalent. Porting DVFS is future work; until then the driver
- * runs at a fixed clock.
+ * runs at the 200 MHz GPLL bring-up rate. Do not raise the DT's
+ * assigned-clock-rates: defaults run before power-up, and these stubs
+ * do not park the NPU-local PVTPLL before power-down.
  *
  * Failure semantics (match the header's own !PM_DEVFREQ fallbacks where
  * they exist): init fails -> probe ignores the return value and continues

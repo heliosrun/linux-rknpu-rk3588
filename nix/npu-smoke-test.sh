@@ -13,16 +13,18 @@ for d in /sys/class/drm/renderD*; do
   drv=$(basename "$(readlink "$d/device/driver")")
   if [ "$drv" = "RKNPU" ]; then rknpu_node="/dev/$(basename "$d")"; fi
 done
-if [ -n "$rknpu_node" ]; then
+if [ -n "$rknpu_node" ] && [ -c "$rknpu_node" ]; then
   pass "render node $rknpu_node (driver RKNPU)"
 else
-  oops "no render node bound to RKNPU (driver probed?)"
+  oops "no usable render node bound to RKNPU (driver probed? device nodes ready?)"
 fi
 
+# Kbuild enables DRM_GEM, not DMA_HEAP. /dev/rknpu is only a misc
+# device in DMA_HEAP builds, or a host-provided compatibility symlink.
 if [ -e /dev/rknpu ]; then
-  pass "/dev/rknpu present"
+  note "/dev/rknpu present (optional compatibility node)"
 else
-  oops "/dev/rknpu missing"
+  note "/dev/rknpu absent (expected for DRM/GEM-only builds)"
 fi
 
 if dmesg >/dev/null 2>&1; then
@@ -48,12 +50,10 @@ else
   note "fdab0000.npu in iommu group $grp (unexpected with this overlay; informational)"
 fi
 
-if [ -r /sys/kernel/debug/clk/clk_summary ]; then
-  note "npu clock lines:"
-  grep -i "npu" /sys/kernel/debug/clk/clk_summary | head -5 | sed "s/^/  /"
-else
-  note "debugfs clk_summary unavailable; skipping clock check"
-fi
+# clk_summary reads rates for all clocks, including SCMI PVTPLLs.
+# Some firmware accesses powered-off islands on rate reads; do not
+# perform that global hardware query in an otherwise passive smoke test.
+note "clock readback skipped; DT bring-up checks require the 200 MHz GPLL rate"
 
 if [ "$fail" = "0" ]; then echo "ALL SMOKE CHECKS PASSED"; else echo "SMOKE CHECKS FAILED"; fi
 exit $fail

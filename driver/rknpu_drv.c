@@ -372,8 +372,11 @@ int rknpu_power_get(struct rknpu_device *rknpu_dev)
 	int ret = 0;
 
 	mutex_lock(&rknpu_dev->power_lock);
-	if (atomic_inc_return(&rknpu_dev->power_refcount) == 1)
+	if (atomic_inc_return(&rknpu_dev->power_refcount) == 1) {
 		ret = rknpu_power_on(rknpu_dev);
+		if (ret)
+			atomic_dec(&rknpu_dev->power_refcount);
+	}
 	mutex_unlock(&rknpu_dev->power_lock);
 
 	return ret;
@@ -436,7 +439,15 @@ static int rknpu_action(struct rknpu_device *rknpu_dev,
 		break;
 	case RKNPU_GET_VOLT:
 #ifndef FPGA_PLATFORM
-		args->value = regulator_get_voltage(rknpu_dev->vdd);
+		/* A genpd-owned supply need not have a driver regulator. */
+		if (!rknpu_dev->vdd) {
+			ret = -ENODEV;
+			break;
+		}
+		ret = regulator_get_voltage(rknpu_dev->vdd);
+		if (ret < 0)
+			break;
+		args->value = ret;
 #endif
 		ret = 0;
 		break;
@@ -624,7 +635,9 @@ static long rknpu_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
 	rknpu_dev = ((struct rknpu_session *)file->private_data)->rknpu_dev;
 
-	rknpu_power_get(rknpu_dev);
+	ret = rknpu_power_get(rknpu_dev);
+	if (ret)
+		return ret;
 
 	switch (_IOC_NR(cmd)) {
 	case RKNPU_ACTION:
@@ -685,8 +698,10 @@ static int rknpu_action_ioctl(struct drm_device *dev, void *data,
 			    struct drm_file *file_priv)                     \
 	{                                                                   \
 		struct rknpu_device *rknpu_dev = dev_get_drvdata(dev->dev); \
-		int ret = -EINVAL;                                          \
-		rknpu_power_get(rknpu_dev);                                 \
+		int ret;                                                   \
+		ret = rknpu_power_get(rknpu_dev);                            \
+		if (ret)                                                   \
+			return ret;                                        \
 		ret = func(dev, data, file_priv);                           \
 		rknpu_power_put_delay(rknpu_dev);                           \
 		return ret;                                                 \
@@ -931,16 +946,13 @@ static void rknpu_drm_remove(struct rknpu_device *rknpu_dev)
 static int rknpu_power_on(struct rknpu_device *rknpu_dev)
 {
 	struct device *dev = rknpu_dev->dev;
-	int ret = -EINVAL;
+	int ret;
 
 #ifndef FPGA_PLATFORM
 	if (rknpu_dev->vdd) {
 		ret = regulator_enable(rknpu_dev->vdd);
 		if (ret) {
-			LOG_DEV_ERROR(
-				dev,
-				"failed to enable vdd reg for rknpu, ret: %d\n",
-				ret);
+			LOG_DEV_ERROR(dev, "failed to enable vdd reg: %d\n", ret);
 			return ret;
 		}
 	}
@@ -948,20 +960,16 @@ static int rknpu_power_on(struct rknpu_device *rknpu_dev)
 	if (rknpu_dev->mem) {
 		ret = regulator_enable(rknpu_dev->mem);
 		if (ret) {
-			LOG_DEV_ERROR(
-				dev,
-				"failed to enable mem reg for rknpu, ret: %d\n",
-				ret);
-			return ret;
+			LOG_DEV_ERROR(dev, "failed to enable mem reg: %d\n", ret);
+			goto err_disable_vdd;
 		}
 	}
 #endif
 
 	ret = clk_bulk_prepare_enable(rknpu_dev->num_clks, rknpu_dev->clks);
 	if (ret) {
-		LOG_DEV_ERROR(dev, "failed to enable clk for rknpu, ret: %d\n",
-			      ret);
-		return ret;
+		LOG_DEV_ERROR(dev, "failed to enable clk for rknpu: %d\n", ret);
+		goto err_disable_regulators;
 	}
 
 #ifndef FPGA_PLATFORM
@@ -969,67 +977,64 @@ static int rknpu_power_on(struct rknpu_device *rknpu_dev)
 #endif
 
 	if (rknpu_dev->multiple_domains) {
-		if (rknpu_dev->genpd_dev_npu0) {
-#if KERNEL_VERSION(5, 5, 0) < LINUX_VERSION_CODE
-			ret = pm_runtime_resume_and_get(
-				rknpu_dev->genpd_dev_npu0);
-#else
-			ret = pm_runtime_get_sync(rknpu_dev->genpd_dev_npu0);
-#endif
-			if (ret < 0) {
-				LOG_DEV_ERROR(
-					dev,
-					"failed to get pm runtime for npu0, ret: %d\n",
-					ret);
-				goto out;
-			}
+		ret = pm_runtime_resume_and_get(rknpu_dev->genpd_dev_npu0);
+		if (ret) {
+			LOG_DEV_ERROR(dev, "failed to resume npu0: %d\n", ret);
+			goto err_unlock;
 		}
-		if (rknpu_dev->genpd_dev_npu1) {
-#if KERNEL_VERSION(5, 5, 0) < LINUX_VERSION_CODE
-			ret = pm_runtime_resume_and_get(
-				rknpu_dev->genpd_dev_npu1);
-#else
-			ret = pm_runtime_get_sync(rknpu_dev->genpd_dev_npu1);
-#endif
-			if (ret < 0) {
-				LOG_DEV_ERROR(
-					dev,
-					"failed to get pm runtime for npu1, ret: %d\n",
-					ret);
-				goto out;
-			}
+
+		ret = pm_runtime_resume_and_get(rknpu_dev->genpd_dev_npu1);
+		if (ret) {
+			LOG_DEV_ERROR(dev, "failed to resume npu1: %d\n", ret);
+			goto err_put_npu0;
 		}
+
 		if (rknpu_dev->genpd_dev_npu2) {
-#if KERNEL_VERSION(5, 5, 0) < LINUX_VERSION_CODE
-			ret = pm_runtime_resume_and_get(
-				rknpu_dev->genpd_dev_npu2);
-#else
-			ret = pm_runtime_get_sync(rknpu_dev->genpd_dev_npu2);
-#endif
-			if (ret < 0) {
-				LOG_DEV_ERROR(
-					dev,
-					"failed to get pm runtime for npu2, ret: %d\n",
-					ret);
-				goto out;
+			ret = pm_runtime_resume_and_get(rknpu_dev->genpd_dev_npu2);
+			if (ret) {
+				LOG_DEV_ERROR(dev, "failed to resume npu2: %d\n", ret);
+				goto err_put_npu1;
 			}
 		}
-	}
-	ret = pm_runtime_get_sync(dev);
-	if (ret < 0) {
-		LOG_DEV_ERROR(dev,
-			      "failed to get pm runtime for rknpu, ret: %d\n",
-			      ret);
 	}
 
-	if (rknpu_dev->config->state_init != NULL)
+	/* Normalizes successful resumes to zero and balances failed gets. */
+	ret = pm_runtime_resume_and_get(dev);
+	if (ret) {
+		LOG_DEV_ERROR(dev, "failed to resume rknpu: %d\n", ret);
+		goto err_put_npu2;
+	}
+
+	if (rknpu_dev->config->state_init)
 		rknpu_dev->config->state_init(rknpu_dev);
 
-out:
 #ifndef FPGA_PLATFORM
 	rknpu_devfreq_unlock(rknpu_dev);
 #endif
+	return 0;
 
+err_put_npu2:
+	if (rknpu_dev->genpd_dev_npu2)
+		pm_runtime_put_sync(rknpu_dev->genpd_dev_npu2);
+err_put_npu1:
+	if (rknpu_dev->genpd_dev_npu1)
+		pm_runtime_put_sync(rknpu_dev->genpd_dev_npu1);
+err_put_npu0:
+	if (rknpu_dev->genpd_dev_npu0)
+		pm_runtime_put_sync(rknpu_dev->genpd_dev_npu0);
+err_unlock:
+#ifndef FPGA_PLATFORM
+	rknpu_devfreq_unlock(rknpu_dev);
+#endif
+	clk_bulk_disable_unprepare(rknpu_dev->num_clks, rknpu_dev->clks);
+err_disable_regulators:
+#ifndef FPGA_PLATFORM
+	if (rknpu_dev->mem)
+		regulator_disable(rknpu_dev->mem);
+err_disable_vdd:
+	if (rknpu_dev->vdd)
+		regulator_disable(rknpu_dev->vdd);
+#endif
 	return ret;
 }
 
@@ -1267,12 +1272,68 @@ static int rknpu_get_invalid_core_mask(struct device *dev)
 	return (int)invalid_core_mask;
 }
 
+static void rknpu_detach_power_domains(struct rknpu_device *rknpu_dev)
+{
+	if (rknpu_dev->genpd_dev_npu2)
+		dev_pm_domain_detach(rknpu_dev->genpd_dev_npu2, true);
+	if (rknpu_dev->genpd_dev_npu1)
+		dev_pm_domain_detach(rknpu_dev->genpd_dev_npu1, true);
+	if (rknpu_dev->genpd_dev_npu0)
+		dev_pm_domain_detach(rknpu_dev->genpd_dev_npu0, true);
+
+	rknpu_dev->genpd_dev_npu2 = NULL;
+	rknpu_dev->genpd_dev_npu1 = NULL;
+	rknpu_dev->genpd_dev_npu0 = NULL;
+	rknpu_dev->multiple_domains = false;
+}
+
+static int rknpu_attach_power_domains(struct rknpu_device *rknpu_dev)
+{
+	struct device *dev = rknpu_dev->dev;
+	struct device **domains[] = {
+		&rknpu_dev->genpd_dev_npu0,
+		&rknpu_dev->genpd_dev_npu1,
+		&rknpu_dev->genpd_dev_npu2,
+	};
+	static const char * const names[] = { "npu0", "npu1", "npu2" };
+	struct device *virt_dev;
+	int num_domains, i, ret;
+
+	num_domains = of_count_phandle_with_args(dev->of_node, "power-domains",
+					       "#power-domain-cells");
+	if (num_domains == -ENOENT)
+		return 0;
+	if (num_domains < 0)
+		return dev_err_probe(dev, num_domains, "invalid power-domains\n");
+	/* The platform bus attaches devices with a single domain. */
+	if (num_domains <= 1)
+		return 0;
+	if (rknpu_dev->config->num_irqs < 2 ||
+	    rknpu_dev->config->num_irqs > RKNPU_MAX_CORES)
+		return dev_err_probe(dev, -EINVAL, "invalid multi-domain core count\n");
+	if (num_domains < rknpu_dev->config->num_irqs)
+		return dev_err_probe(dev, -EINVAL, "missing NPU power domains\n");
+
+	for (i = 0; i < rknpu_dev->config->num_irqs; i++) {
+		virt_dev = dev_pm_domain_attach_by_name(dev, names[i]);
+		if (IS_ERR_OR_NULL(virt_dev)) {
+			ret = virt_dev ? PTR_ERR(virt_dev) : -ENODEV;
+			return dev_err_probe(dev, ret,
+					     "failed to attach %s power domain\n",
+					     names[i]);
+		}
+		*domains[i] = virt_dev;
+	}
+
+	rknpu_dev->multiple_domains = true;
+	return 0;
+}
+
 static int rknpu_probe(struct platform_device *pdev)
 {
 	struct resource *res = NULL;
 	struct rknpu_device *rknpu_dev = NULL;
 	struct device *dev = &pdev->dev;
-	struct device *virt_dev = NULL;
 	const struct of_device_id *match = NULL;
 	const struct rknpu_config *config = NULL;
 	int ret = -EINVAL, i = 0;
@@ -1467,25 +1528,13 @@ static int rknpu_probe(struct platform_device *pdev)
 
 	pm_runtime_enable(dev);
 
-	if (of_count_phandle_with_args(dev->of_node, "power-domains",
-				       "#power-domain-cells") > 1) {
-		virt_dev = dev_pm_domain_attach_by_name(dev, "npu0");
-		if (!IS_ERR(virt_dev))
-			rknpu_dev->genpd_dev_npu0 = virt_dev;
-		virt_dev = dev_pm_domain_attach_by_name(dev, "npu1");
-		if (!IS_ERR(virt_dev))
-			rknpu_dev->genpd_dev_npu1 = virt_dev;
-		if (config->num_irqs > 2) {
-			virt_dev = dev_pm_domain_attach_by_name(dev, "npu2");
-			if (!IS_ERR(virt_dev))
-				rknpu_dev->genpd_dev_npu2 = virt_dev;
-		}
-		rknpu_dev->multiple_domains = true;
-	}
+	ret = rknpu_attach_power_domains(rknpu_dev);
+	if (ret)
+		goto err_detach_domains;
 
 	ret = rknpu_power_on(rknpu_dev);
 	if (ret)
-		goto err_remove_drv;
+		goto err_detach_domains;
 
 #ifndef FPGA_PLATFORM
 	rknpu_devfreq_init(rknpu_dev);
@@ -1539,9 +1588,14 @@ err_remove_wq:
 	destroy_workqueue(rknpu_dev->power_off_wq);
 
 err_devfreq_remove:
+	rknpu_power_off(rknpu_dev);
 #ifndef FPGA_PLATFORM
 	rknpu_devfreq_remove(rknpu_dev);
 #endif
+
+err_detach_domains:
+	pm_runtime_disable(dev);
+	rknpu_detach_power_domains(rknpu_dev);
 
 err_remove_drv:
 #ifdef CONFIG_ROCKCHIP_RKNPU_DRM_GEM
@@ -1604,16 +1658,8 @@ static void rknpu_remove(struct platform_device *pdev)
 		rknpu_power_off(rknpu_dev);
 	mutex_unlock(&rknpu_dev->power_lock);
 
-	if (rknpu_dev->multiple_domains) {
-		if (rknpu_dev->genpd_dev_npu0)
-			dev_pm_domain_detach(rknpu_dev->genpd_dev_npu0, true);
-		if (rknpu_dev->genpd_dev_npu1)
-			dev_pm_domain_detach(rknpu_dev->genpd_dev_npu1, true);
-		if (rknpu_dev->genpd_dev_npu2)
-			dev_pm_domain_detach(rknpu_dev->genpd_dev_npu2, true);
-	}
-
 	pm_runtime_disable(&pdev->dev);
+	rknpu_detach_power_domains(rknpu_dev);
 }
 
 #ifndef FPGA_PLATFORM
@@ -1621,10 +1667,17 @@ static void rknpu_remove(struct platform_device *pdev)
 static int rknpu_suspend(struct device *dev)
 {
 	struct rknpu_device *rknpu_dev = dev_get_drvdata(dev);
+	int ret;
 
-	rknpu_power_get(rknpu_dev);
+	ret = rknpu_power_get(rknpu_dev);
+	if (ret)
+		return ret;
 
-	return pm_runtime_force_suspend(dev);
+	ret = pm_runtime_force_suspend(dev);
+	if (ret)
+		rknpu_power_put_delay(rknpu_dev);
+
+	return ret;
 }
 
 static int rknpu_resume(struct device *dev)
