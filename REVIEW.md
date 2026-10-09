@@ -111,6 +111,13 @@ The smoke test no longer reads global `clk_summary`. That reads all
 clock rates, potentially causing firmware to access powered-off
 PVTPLL islands. It is not a passive or universally safe diagnostic.
 The DT build checks verify the configured rate, not hardware readback.
+At runtime the smoke test instead reads the configured rate back from
+the live device tree (/proc/device-tree, a passive in-memory blob, no
+firmware MMIO) and fails on any mismatch with EXPECTED_HZ (default
+200 MHz): a wrong rate means the booted DTB is not the deployed
+overlay. All system paths in the script are overridable for testing,
+and `--self-test` covers the healthy, rate-mismatch, stale-DTB,
+iommu-mode, and unbound-render-node cases.
 
 ## Headless validation and recovery
 
