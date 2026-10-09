@@ -50,6 +50,11 @@ jobs:
       - name: Check NPU clock policy
         run: ./rknpu/scripts/check-clock-policy.sh
 
+      # Self-test only (seconds, no hardware): the rehearsal logic
+      # validates itself against fake inputs.
+      - name: Self-test kexec rehearsal
+        run: ./rknpu/scripts/kexec-rehearsal.sh --self-test
+
       - name: Restore kernel source
         id: src
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4

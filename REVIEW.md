@@ -138,6 +138,16 @@ it cannot guarantee recovery from an EL3/SCMI firmware hang. This repo
 does not install a rollback timer. Warm kexec preserves hardware state
 and is not evidence that the same DTB is safe on a cold boot.
 
+## Kexec rehearsal (mandatory before any switch+reboot)
+
+`scripts/kexec-rehearsal.sh` boots a freshly built generation without
+touching the bootloader: build with `nixos-rebuild build` (never switch),
+dry-run the script against the result's kernel/initrd/board DTB, then
+run with `--confirm`. If the kexec'd kernel hangs, power-cycle: the boot
+loader still points at the known-good generation. Green kexec boot plus
+passing smoke/matmul gates is the precondition for switch+reboot; it
+replaces the old runbook's direct reboot step entirely.
+
 ## Validation limits
 
 DT compilation/application and module compilation do not exercise
