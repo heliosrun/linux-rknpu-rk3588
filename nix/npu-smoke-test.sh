@@ -11,7 +11,7 @@ rknpu_node=""
 for d in /sys/class/drm/renderD*; do
   [ -e "$d/device/driver" ] || continue
   drv=$(basename "$(readlink "$d/device/driver")")
-  if [ "$drv" = "RKNPU" ]; then rknpu_node="/dev/$(basename "$d")"; fi
+  if [ "$drv" = "RKNPU" ]; then rknpu_node="/dev/dri/$(basename "$d")"; fi
 done
 if [ -n "$rknpu_node" ] && [ -c "$rknpu_node" ]; then
   pass "render node $rknpu_node (driver RKNPU)"
