@@ -1,0 +1,36 @@
+name: Refresh vendor diff anchor
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - driver/**
+      - scripts/update-vendor-diff.sh
+      - .github/workflows/vendor-diff.yml
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  refresh-anchor:
+    runs-on: blacksmith-8vcpu-ubuntu-2404-arm
+    timeout-minutes: 10
+    steps:
+      - name: Checkout with full history
+        uses: useblacksmith/checkout@25227e61ff9dafe400e22fa487b673eac4e4409a # v1
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Refresh driver-only diff anchor
+        env:
+          GIT_AUTHOR_NAME: heliosran
+          GIT_AUTHOR_EMAIL: 264772879+heliosran@users.noreply.github.com
+          GIT_COMMITTER_NAME: heliosran
+          GIT_COMMITTER_EMAIL: 264772879+heliosran@users.noreply.github.com
+        run: ./scripts/update-vendor-diff.sh --push --remote origin --main origin/main --vendor origin/vendor/v0.9.8 --diff diff/vendor-v0.9.8

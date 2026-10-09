@@ -8,12 +8,13 @@ against 7.2). No vendor blobs: kernel source only.
 
 Reviewing the port against its source:
 
-- [Full port diff (GitHub compare)](https://github.com/heliosrun/linux-rknpu-rk3588/compare/vendor/v0.9.8...diff/vendor-v0.9.8) -
-  every change vs pristine vendor, file by file. The `vendor/v0.9.8`
-  branch holds the unmodified source; `diff/vendor-v0.9.8` is a
-  no-op merge anchoring the compare (unrelated histories cannot be
-  compared directly). Refresh it with `git merge -s ours main` on
-  that branch after main moves.
+- [Port diff, driver only (GitHub compare)](https://github.com/heliosrun/linux-rknpu-rk3588/compare/vendor/v0.9.8...diff/vendor-v0.9.8) -
+  every `driver/` change vs pristine vendor, file by file. The
+  `vendor/v0.9.8` branch holds the unmodified source; `diff/vendor-v0.9.8`
+  contains only `main`'s `driver/` subtree while retaining the vendor
+  history, so unrelated repo files stay out of the compare.
+  Refresh it with `scripts/update-vendor-diff.sh --push` after `driver/`
+  moves; CI does this automatically on `main`.
 - Locally: `git diff vendor/v0.9.8...diff/vendor-v0.9.8 -- driver/`
   after fetching both branches.
 
@@ -24,7 +25,7 @@ Reviewing the port against its source:
 | driver/ | the ported driver source, buildable out-of-tree |
 | nix/ | nix packaging: module derivation, NixOS module, DT overlay |
 | linux-integration/ | in-tree wiring reference (Kconfig, Makefile, vendor DT nodes) |
-| scripts/ | CI build steps as runnable scripts (kernel, module, DT check) |
+| scripts/ | CI build steps and vendor-diff updater as runnable scripts |
 | .github/workflows/ | CI: out-of-tree build vs pristine torvalds tag + nix build |
 
 ## What the port changes (vs vendor v0.9.8)
