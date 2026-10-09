@@ -62,9 +62,18 @@ new_tree="$(printf '040000 tree %s\tdriver\n' "$driver_tree" | git mktree)"
 ref="refs/heads/${DIFF}"
 parents=()
 old_commit=""
+local_ref_exists=0
 
 if git rev-parse --verify --quiet "$ref" >/dev/null; then
   old_commit="$(git rev-parse --verify "$ref")"
+  local_ref_exists=1
+elif git rev-parse --verify --quiet "${REMOTE}/${DIFF}^{commit}" >/dev/null; then
+  # Fresh checkouts (e.g. CI) have no local branch yet; base the update on
+  # the published tip so the push stays fast-forward.
+  old_commit="$(git rev-parse --verify "${REMOTE}/${DIFF}^{commit}")"
+fi
+
+if [ -n "$old_commit" ]; then
   if ! git merge-base --is-ancestor "$vendor_commit" "$old_commit"; then
     echo "error: ${DIFF} does not contain ${VENDOR}; refusing to rewrite it" >&2
     exit 1
@@ -96,7 +105,7 @@ if [ "$DRY_RUN" -eq 1 ]; then
 fi
 
 new_commit="$(git commit-tree "$new_tree" "${parents[@]}" -m "$message")"
-if [ -n "$old_commit" ]; then
+if [ "$local_ref_exists" -eq 1 ]; then
   git update-ref -m "$message" "$ref" "$new_commit" "$old_commit"
 else
   git update-ref -m "$message" "$ref" "$new_commit"
