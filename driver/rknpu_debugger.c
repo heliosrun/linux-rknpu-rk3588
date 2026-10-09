@@ -96,16 +96,19 @@ static ssize_t rknpu_power_set(struct file *file, const char __user *ubuf,
 	struct rknpu_device *rknpu_dev =
 		container_of(debugger, struct rknpu_device, debugger);
 	char buf[8];
+	int ret;
 
-	if (len > sizeof(buf) - 1)
+	if (!len || len > sizeof(buf) - 1)
 		return -EINVAL;
 	if (copy_from_user(buf, ubuf, len))
 		return -EFAULT;
 	buf[len - 1] = '\0';
 
 	if (strcmp(buf, "on") == 0) {
+		ret = rknpu_power_get(rknpu_dev);
+		if (ret)
+			return ret;
 		atomic_inc(&rknpu_dev->cmdline_power_refcount);
-		rknpu_power_get(rknpu_dev);
 		LOG_INFO("rknpu power is on!");
 	} else if (strcmp(buf, "off") == 0) {
 		if (atomic_read(&rknpu_dev->power_refcount) > 0 &&
@@ -178,8 +181,11 @@ static int rknpu_freq_show(struct seq_file *m, void *data)
 	struct rknpu_device *rknpu_dev =
 		container_of(debugger, struct rknpu_device, debugger);
 	unsigned long current_freq = 0;
+	int ret;
 
-	rknpu_power_get(rknpu_dev);
+	ret = rknpu_power_get(rknpu_dev);
+	if (ret)
+		return ret;
 
 	current_freq = clk_get_rate(rknpu_dev->clks[0].clk);
 
@@ -219,7 +225,9 @@ static ssize_t rknpu_freq_set(struct file *file, const char __user *ubuf,
 	if (!rknpu_dev->devfreq)
 		return -EFAULT;
 
-	rknpu_power_get(rknpu_dev);
+	ret = rknpu_power_get(rknpu_dev);
+	if (ret)
+		return ret;
 
 	current_freq = clk_get_rate(rknpu_dev->clks[0].clk);
 	if (freq != current_freq) {
@@ -247,11 +255,17 @@ static int rknpu_volt_show(struct seq_file *m, void *data)
 	struct rknpu_debugger *debugger = node->debugger;
 	struct rknpu_device *rknpu_dev =
 		container_of(debugger, struct rknpu_device, debugger);
-	unsigned long current_volt = 0;
+	int current_volt;
+
+	/* The board may supply the rail through genpd, not this device. */
+	if (!rknpu_dev->vdd)
+		return -ENODEV;
 
 	current_volt = regulator_get_voltage(rknpu_dev->vdd);
+	if (current_volt < 0)
+		return current_volt;
 
-	seq_printf(m, "%lu\n", current_volt);
+	seq_printf(m, "%d\n", current_volt);
 
 	return 0;
 }
