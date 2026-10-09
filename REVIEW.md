@@ -173,20 +173,28 @@ blindly: the OPi 5 Pro validates 300-700 MHz at 0.70 V and 800 MHz at
 with margin. A fixed rail below the OPP voltage blocks frequency work
 on hardware grounds, not software.
 
-Gate 2 - build, never deploy. Relax the assertion locally, set npuClockHz
-to the target, `nixos-rebuild build` only. Confirm the generated overlay,
-DT checks, and installed smoke expectation all carry the new rate (the
-option wiring makes this mechanical, not manual).
+Gate 2 - build, never deploy. The DT default stays at its cold-safe
+value: do NOT set npuClockHz to the target rate, because the generated
+overlay's assigned-clock-rates is applied cold at bind time. Instead,
+build the candidate with the option unchanged (200 MHz) plus the
+driver-managed raise path under test; `nixos-rebuild build` only. The
+smoke test's DT-rate gate must still report 200 MHz at boot - the higher
+operating rate may only appear after the driver powers the domains,
+never in the device tree.
 
 Gate 3 - kexec rehearsal. Dry-run, then `--confirm`, per the section
 above. Any hang: power-cycle, record where the boot stopped from the
 serial log, stop the protocol.
 
-Gate 4 - validate under kexec. The smoke test must report the new rate;
-run the full matmul sweep on every core mask and compare against the
-200 MHz baselines. Tolerate only the documented lane-0 2^-16 divergences
-per the RK3588 notes. Record SoC temperature throughout, against a 200
-MHz thermal baseline taken first, so the delta is meaningful.
+Gate 4 - validate under kexec. Distinguish the two rates: the smoke
+test's DT gate must still report the 200 MHz device-tree default at
+boot, while the higher operating rate is observed separately at runtime
+(devfreq cur_freq or equivalent driver interface - never clk_summary).
+Then run the full matmul sweep on every core mask and compare against
+the 200 MHz baselines. Tolerate only the documented lane-0 2^-16
+divergences per the RK3588 notes. Record SoC temperature throughout,
+against a 200 MHz thermal baseline taken first, so the delta is
+meaningful.
 
 Gate 5 - power sequencing. Suspend/resume cycle, module unload/reload at
 the new rate, and an idle gap long enough to trigger runtime suspend.
@@ -194,9 +202,12 @@ Confirm the clock returns to a safe state on every transition - this
 driver stubs devfreq, so any failure here means implementing park-to-200
 first, not waiving the gate.
 
-Gate 6 - promote. Commit the assertion change together with the
-measurement log (rail numbers, sweep results, thermals, serial logs of
-every kexec boot). Switch with the rollback guard armed and no
+Gate 6 - promote. Commit the driver-managed raise path together with
+the measurement log (rail numbers, sweep results, thermals, serial logs
+of every kexec boot). The npuClockHz assertion changes only if the DT
+default itself must move, which cold-programming analysis forbids for
+any rate the island cannot take while off. Switch with the rollback
+guard armed and no
 cancellation marker; reboot in a maintenance window; touch the marker
 only after the on-hardware gates repeat green.
 

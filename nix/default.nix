@@ -32,12 +32,14 @@ in
       type = lib.types.ints.positive;
       default = 200000000;
       description = ''
-        Target NPU compute-clock rate in Hz. Currently locked to
-        200 MHz (the vendor POWER_DOWN_FREQ / safe GPLL bring-up
-        rate): any other value is rejected by the assertion below until
-        the REVIEW.md higher-frequency validation checklist is complete
-        with hardware evidence (board-validated rail voltage, in-driver
-        raise sequencing, park-to-200 on power-down).
+        Device-tree default NPU compute-clock rate in Hz, applied cold
+        at bind time by of_clk_set_defaults. It must therefore stay at
+        a cold-safe value, currently locked to 200 MHz (the vendor
+        POWER_DOWN_FREQ / safe GPLL bring-up rate). A higher
+        *operating* rate belongs to a future driver-managed raise path
+        (raise only while powered, park-to-200 on power-down), never to
+        this option: programming an unsafe rate here would reintroduce
+        cold programming of the NPU-local PVTPLL. See REVIEW.md.
       '';
     };
   };
