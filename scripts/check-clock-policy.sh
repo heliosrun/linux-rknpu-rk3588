@@ -12,20 +12,20 @@ EXPECTED_HZ=200000000
 UNSAFE_HZ="600000000 900000000 1000000000"
 fail=0
 : "${ROOT:=$(dirname "$0")/..}"
+# Absolutize the script path before cd: recursive self-test calls use a
+# relative $0, which would break once we leave the caller's directory.
+SCRIPT="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 cd "$ROOT"
 
 run_self_test() {
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' EXIT
-  mkdir -p "$tmp/nix" "$tmp/linux-integration" "$tmp/scripts" "$tmp/driver"
-  cp nix/overlay.dts.in "$tmp/nix/"
-  cp linux-integration/rk3588-vendor-nodes.dtsi "$tmp/linux-integration/"
-  cp nix/check-dt.nix "$tmp/nix/"
-  cp scripts/check-dt-overlay.sh "$tmp/scripts/"
-  cp driver/Kbuild "$tmp/driver/"
-  cp nix/default.nix nix/npu-smoke-test.sh "$tmp/nix/"
+  # Mirror every dir the policy reads, so fixtures can never rot behind
+  # the check list: every checked file is present by construction.
+  # (Plain cp -r: no tar dependency, works on minimal PATHs.)
+  cp -r nix linux-integration scripts driver "$tmp/"
   echo "-- self-test: pristine fixtures pass"
-  if ROOT="$tmp" "$0" | grep -q "ALL CLOCK POLICY CHECKS PASSED"; then
+  if ROOT="$tmp" "$SCRIPT" | grep -q "ALL CLOCK POLICY CHECKS PASSED"; then
     echo "ok: fixtures pass"
   else
     echo "FAIL: fixtures should pass"
@@ -33,7 +33,7 @@ run_self_test() {
   fi
   echo "-- self-test: tampered rate fails"
   sed -i 's/200000000/600000000/g' "$tmp/scripts/check-dt-overlay.sh"
-  if ROOT="$tmp" "$0" >/dev/null 2>&1; then
+  if ROOT="$tmp" "$SCRIPT" >/dev/null 2>&1; then
     echo "FAIL: tampered rate accepted"
     return 1
   else
@@ -42,7 +42,7 @@ run_self_test() {
   echo "-- self-test: missing devfreq stub fails"
   cp scripts/check-dt-overlay.sh "$tmp/scripts/"
   sed -i '/rknpu_devfreq_stub/d' "$tmp/driver/Kbuild"
-  if ROOT="$tmp" "$0" >/dev/null 2>&1; then
+  if ROOT="$tmp" "$SCRIPT" >/dev/null 2>&1; then
     echo "FAIL: missing stub accepted"
     return 1
   else
