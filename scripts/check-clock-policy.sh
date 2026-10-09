@@ -89,6 +89,8 @@ check_contains driver/Kbuild 'rknpu_devfreq_stub\.o' "devfreq stub object"
 check_absent driver/Kbuild '^rknpu-y += rknpu_devfreq\.o$' "real devfreq object"
 check_contains nix/default.nix 'npuClockHz == 200000000' "200 MHz assertion"
 check_contains nix/npu-smoke-test.sh 'EXPECTED_HZ:=200000000' "smoke-test expected-rate default"
+check_contains nix/test.nix 'expectedHz ? 200000000' "test-package rate default"
+check_contains nix/default.nix 'expectedHz = cfg.npuClockHz' "test follows gated option"
 if [ "$fail" -ne 0 ]; then
   echo "CLOCK POLICY CHECKS FAILED"
   exit 1

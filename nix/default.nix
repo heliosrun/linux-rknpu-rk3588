@@ -63,7 +63,9 @@ in
     # Bring-up test tools: npu-smoke-test (stage-1 checks), rknpu-test
     # (per-core fp16 matmul sweep), matmul_fp16_rocket (raw probe).
     environment.systemPackages = [
-      (pkgs.callPackage ./test.nix { })
+      # The installed smoke test's expected rate follows the gated
+      # option, so a future unlocked rate flows through automatically.
+      (pkgs.callPackage ./test.nix { expectedHz = cfg.npuClockHz; })
     ];
 
     hardware.deviceTree.overlays = [

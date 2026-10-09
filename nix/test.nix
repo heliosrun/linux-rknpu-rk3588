@@ -3,6 +3,9 @@
   stdenv,
   cmake,
   fetchFromGitHub,
+  # Must match hardware.rknpu.npuClockHz for the configuration under
+  # test; the module passes its (assertion-locked) option value here.
+  expectedHz ? 200000000,
 }:
 
 let
@@ -51,6 +54,10 @@ stdenv.mkDerivation {
 
     install -Dm755 consumer-build/matmul_fp16_rocket -t $out/bin/
     install -Dm755 ${./npu-smoke-test.sh} $out/bin/npu-smoke-test
+    # Bake the configured expectation into the installed script's default
+    # (the EXPECTED_HZ env override still wins, for ad-hoc testing).
+    substitute $out/bin/npu-smoke-test $out/bin/npu-smoke-test \
+      --replace-fail 'EXPECTED_HZ:=200000000' "EXPECTED_HZ:=${toString expectedHz}"
     substitute ${./rknpu-test-runner.sh} $out/bin/rknpu-test \
       --replace-fail @BINDIR@ "$out/bin"
     chmod 755 $out/bin/rknpu-test
