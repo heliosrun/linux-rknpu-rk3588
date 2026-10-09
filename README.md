@@ -8,7 +8,7 @@ against 7.2). No vendor blobs: kernel source only.
 
 Reviewing the port against its source:
 
-- [Port diff, driver only (GitHub compare)](https://github.com/heliosrun/linux-rknpu-rk3588/compare/vendor/v0.9.8...diff/vendor-v0.9.8) -
+- [Port diff, driver only (GitHub compare)](https://github.com/heliosrun/linux-rknpu-rk3588/compare/vendor/v0.9.8...diff/vendor-v0.9.8#files_bucket) -
   every `driver/` change vs pristine vendor, file by file. The
   `vendor/v0.9.8` branch holds the unmodified source; `diff/vendor-v0.9.8`
   contains only `main`'s `driver/` subtree while retaining the vendor
@@ -20,13 +20,13 @@ Reviewing the port against its source:
 
 ## Layout
 
-| path | purpose |
-| --- | --- |
-| driver/ | the ported driver source, buildable out-of-tree |
-| nix/ | nix packaging: module derivation, NixOS module, DT overlay |
+| path               | purpose                                                       |
+| ------------------ | ------------------------------------------------------------- |
+| driver/            | the ported driver source, buildable out-of-tree               |
+| nix/               | nix packaging: module derivation, NixOS module, DT overlay    |
 | linux-integration/ | in-tree wiring reference (Kconfig, Makefile, vendor DT nodes) |
-| scripts/ | CI build steps and vendor-diff updater as runnable scripts |
-| .github/workflows/ | CI: out-of-tree build vs pristine torvalds tag + nix build |
+| scripts/           | CI build steps and vendor-diff updater as runnable scripts    |
+| .github/workflows/ | CI: out-of-tree build vs pristine torvalds tag + nix build    |
 
 ## What the port changes (vs vendor v0.9.8)
 
