@@ -21,7 +21,7 @@
         default = self.packages.${system}.rknpu;
       };
 
-      # Validates nix/overlay.dts against the pinned nixpkgs kernel DTBs
+      # Validates nix/overlay.dts.in against the pinned nixpkgs kernel DTBs
       # using the same gating NixOS apply_overlays.py uses (substring
       # filter + root-compatible intersection), then asserts node states.
       checks.${system} = {

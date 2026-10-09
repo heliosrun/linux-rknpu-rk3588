@@ -83,11 +83,13 @@
 			      "hclk2", "pclk";
 		assigned-clocks = <&scmi_clk SCMI_CLK_NPU>;
 		/* Clock defaults run before power-domain attachment/probe.
-		 * 200 MHz uses GPLL; higher SCMI rates program the NPU-local
-		 * PVTPLL and can hang firmware while its domain is off.
-		 * Keep this rate until the driver implements voltage/rate
-		 * sequencing and parks the clock before every power-down. */
-		assigned-clock-rates = <200000000>;
+		 * @NPU_CLOCK_HZ@ is substituted at build time from
+		 * hardware.rknpu.npuClockHz (default 200000000). 200 MHz uses
+		 * GPLL; higher SCMI rates program the NPU-local PVTPLL and can
+		 * hang firmware while its domain is off. Only raise the option
+		 * with the REVIEW.md validation complete; the assertion in
+		 * nix/default.nix currently rejects anything but 200 MHz. */
+		assigned-clock-rates = <@NPU_CLOCK_HZ@>;
 		resets = <&cru SRST_A_RKNN0>, <&cru SRST_A_RKNN1>,
 			 <&cru SRST_A_RKNN2>,
 			 <&cru SRST_H_RKNN0>, <&cru SRST_H_RKNN1>,

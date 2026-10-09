@@ -3,6 +3,9 @@
   stdenv,
   kernel,
   dtc,
+  # Must match hardware.rknpu.npuClockHz for the configuration under
+  # test; the module assertion currently locks that option to 200 MHz.
+  npuClockHz ? 200000000,
 }:
 
 stdenv.mkDerivation {
@@ -18,7 +21,9 @@ stdenv.mkDerivation {
     set -euo pipefail
     INC=${kernel.dev}/lib/modules/${kernel.modDirVersion}/source/scripts/dtc/include-prefixes
     DTBS=${kernel}/dtbs/rockchip
-    OVERLAY=${./overlay.dts}
+    OVERLAY_IN=${./overlay.dts.in}
+    sed "s/@NPU_CLOCK_HZ@/${toString npuClockHz}/" "$OVERLAY_IN" > overlay.dts
+    OVERLAY=overlay.dts
     FILTER=rk3588
     BOARD=rk3588-friendlyelec-cm3588-nas.dtb
 
@@ -66,10 +71,10 @@ stdenv.mkDerivation {
     check /rknpu@fdab0000 status okay
     check /rknpu@fdab0000 compatible rockchip,rk3588-rknpu
     # Clock defaults are applied with the NPU domains still off.
-    check /rknpu@fdab0000 assigned-clock-rates 200000000
+    check /rknpu@fdab0000 assigned-clock-rates ${toString npuClockHz}
     # Non-IOMMU mode: the node must have NO iommus property and the
     # merged mmu device must not exist (the mainline rockchip-iommu
-    # driver cannot drive the 4-window device - see overlay.dts).
+    # driver cannot drive the 4-window device - see overlay.dts.in).
     if fdtget "$OUT" /rknpu@fdab0000 iommus >/dev/null 2>&1; then
       echo "FAIL: iommus present but non-iommu mode expected"; exit 1
     fi

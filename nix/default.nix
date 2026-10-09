@@ -72,7 +72,12 @@ in
         # NOTE: filter is a plain SUBSTRING match in
         # apply_overlays.py, not a glob.
         filter = "rk3588";
-        dtsFile = ./overlay.dts;
+        # The rate is the gated hardware.rknpu.npuClockHz option
+        # (locked to 200 MHz by the assertion above until the
+        # REVIEW.md validation is complete with hardware evidence).
+        dtsFile = pkgs.writeText "rknpu-overlay.dts" (builtins.replaceStrings
+          [ "@NPU_CLOCK_HZ@" ] [ (toString cfg.npuClockHz) ]
+          (builtins.readFile ./overlay.dts.in));
       }
     ];
   };

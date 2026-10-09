@@ -1,13 +1,19 @@
 #!/usr/bin/env bash
 # Apply the NixOS DT overlay to a pristine mainline DTB and assert the
-# resulting tree: vendor node at 200 MHz, rocket cores and IOMMUs off.
-# Usage: check-dt-overlay.sh <linux-dir> <overlay-dts> [jobs]
+# resulting tree: vendor node at the expected rate (default 200 MHz),
+# rocket cores and IOMMUs off.
+# Usage: check-dt-overlay.sh <linux-dir> <overlay-dts-in> [jobs] [hz]
 set -euo pipefail
 # Absolutize first: relative paths would break after the cd below
 # (INC is computed from LINUX_DIR and consumed from inside it).
-LINUX_DIR="$(cd "${1:?usage: check-dt-overlay.sh <linux-dir> <overlay-dts> [jobs]}" && pwd)"
-OVERLAY_DTS="$(cd "$(dirname "${2:?usage: check-dt-overlay.sh <linux-dir> <overlay-dts> [jobs]}")" && pwd)/$(basename "${2}")"
+LINUX_DIR="$(cd "${1:?usage: check-dt-overlay.sh <linux-dir> <overlay-dts-in> [jobs] [hz]}" && pwd)"
+OVERLAY_DTS_IN="$(cd "$(dirname "${2:?usage: check-dt-overlay.sh <linux-dir> <overlay-dts-in> [jobs] [hz]}")" && pwd)/$(basename "${2}")"
 JOBS="${3:-$(nproc)}"
+# Expected assigned-clock-rates. Only 200 MHz is validated; anything
+# higher requires the REVIEW.md checklist with hardware evidence.
+HZ="${4:-200000000}"
+sed "s/@NPU_CLOCK_HZ@/$HZ/" "$OVERLAY_DTS_IN" > /tmp/overlay.dts
+OVERLAY_DTS=/tmp/overlay.dts
 DTC=$(command -v dtc)
 FDTOVERLAY=$(command -v fdtoverlay)
 FDTGET=$(command -v fdtget)
@@ -35,7 +41,7 @@ check() {
 check /rknpu@fdab0000 status okay
 check /rknpu@fdab0000 compatible rockchip,rk3588-rknpu
 # Clock defaults are applied with the NPU domains still off.
-check /rknpu@fdab0000 assigned-clock-rates 200000000
+check /rknpu@fdab0000 assigned-clock-rates "$HZ"
 # Non-IOMMU mode: the node must have NO iommus property and the
 # merged mmu device must not exist (the mainline rockchip-iommu
 # driver cannot drive the 4-window device - see REVIEW.md Finding 1b).

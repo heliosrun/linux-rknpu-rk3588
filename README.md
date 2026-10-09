@@ -43,8 +43,9 @@ Reviewing the port against its source:
   (DMA_HEAP) and rknpu_mm.o (SRAM) excluded.
 - DT: vendor rknpu@fdab0000 node is mutually exclusive with the
   mainline rocket (accel) cores (same MMIO). The nix overlay
-  (nix/overlay.dts) disables rocket and its per-core IOMMUs, and
-  creates the vendor node at 200 MHz without an `iommus` property.
+  (nix/overlay.dts.in, generated with hardware.rknpu.npuClockHz)
+  disables rocket and its per-core IOMMUs, and creates the vendor node
+  at 200 MHz without an `iommus` property.
   This uses physical DMA without NPU DMA isolation.
 
 ## NixOS

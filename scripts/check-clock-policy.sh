@@ -27,11 +27,19 @@ check_absent() {
     echo "ok: $1 has no $3"
   fi
 }
-for f in nix/overlay.dts linux-integration/rk3588-vendor-nodes.dtsi nix/check-dt.nix scripts/check-dt-overlay.sh; do
+for f in linux-integration/rk3588-vendor-nodes.dtsi nix/check-dt.nix scripts/check-dt-overlay.sh; do
   check_contains "$f" "$EXPECTED_HZ" "rate $EXPECTED_HZ"
   for hz in $UNSAFE_HZ; do
     check_absent "$f" "$hz" "rate $hz"
   done
+done
+# The NixOS overlay is a template: the rate comes from the gated
+# hardware.rknpu.npuClockHz option. The placeholder must survive, and no
+# unsafe literal rate may be baked in.
+check_contains nix/overlay.dts.in '@NPU_CLOCK_HZ@' "rate placeholder"
+check_contains nix/overlay.dts.in "$EXPECTED_HZ" "documented default rate"
+for hz in $UNSAFE_HZ; do
+  check_absent nix/overlay.dts.in "$hz" "rate $hz"
 done
 check_contains driver/Kbuild 'rknpu_devfreq_stub\.o' "devfreq stub object"
 check_absent driver/Kbuild '^rknpu-y += rknpu_devfreq\.o$' "real devfreq object"

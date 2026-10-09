@@ -14,14 +14,14 @@ on:
     paths:
       - driver/**
       - linux-integration/**
-      - nix/overlay.dts
+      - nix/overlay.dts.in
       - scripts/**
       - .github/workflows/build.yml
   pull_request:
     paths:
       - driver/**
       - linux-integration/**
-      - nix/overlay.dts
+      - nix/overlay.dts.in
       - scripts/**
       - .github/workflows/build.yml
 
@@ -108,7 +108,7 @@ jobs:
       # overlay disables the rocket cores and creates the vendor node,
       # against unmodified upstream DTs.
       - name: Check device tree overlay
-        run: ./rknpu/scripts/check-dt-overlay.sh linux "${{ github.workspace }}/rknpu/nix/overlay.dts"
+        run: ./rknpu/scripts/check-dt-overlay.sh linux "${{ github.workspace }}/rknpu/nix/overlay.dts.in" "$(nproc)" 200000000
 
       - name: Save ccache
         if: always()
