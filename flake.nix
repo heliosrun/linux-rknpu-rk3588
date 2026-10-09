@@ -57,6 +57,42 @@
             echo "ok: module generates 200 MHz overlay from npuClockHz"
             touch $out
           '';
+        # Proves the npuClockHz gate rejects: two otherwise-identical
+        # minimal systems differ only in the rate, so rejection of the
+        # 600 MHz system can only come from this module's assertion.
+        # (That 600000000 literal is a negative test vector, not a
+        # configured rate.) Pure evaluation, no builds; enforced by
+        # tryEval booleans, so any regression fails flake evaluation
+        # loudly. Filtering config.assertions by message does NOT work
+        # instead: unrelated nixpkgs assertions carry lazy messages that
+        # throw when forced out of context, and plain match cannot span
+        # newlines.
+        rate-gate-negative =
+          let
+            mkSys = npuClockHz: nixpkgs.lib.nixosSystem {
+              system = system;
+              modules = [
+                self.nixosModules.rknpu
+                ({ config, ... }: {
+                  hardware.rknpu.enable = true;
+                  hardware.rknpu.npuClockHz = npuClockHz;
+                  fileSystems."/" = {
+                    device = "/dev/disk/by-label/nixos";
+                    fsType = "ext4";
+                  };
+                  boot.loader.grub.enable = true;
+                  boot.loader.grub.device = "nodev";
+                  system.stateVersion = "26.11";
+                })
+              ];
+            };
+            goodEval = (builtins.tryEval
+              (mkSys 200000000).config.system.build.toplevel.drvPath).success;
+            badRejected = !(builtins.tryEval
+              (mkSys 600000000).config.system.build.toplevel.drvPath).success;
+          in
+          assert goodEval && badRejected;
+          pkgs.runCommand "rknpu-rate-gate-negative-check" { } "touch $out";
       };
 
       # Consume from a NixOS host:
