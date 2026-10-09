@@ -24,6 +24,7 @@ run_self_test() {
   # the check list: every checked file is present by construction.
   # (Plain cp -r: no tar dependency, works on minimal PATHs.)
   cp -r nix linux-integration scripts driver "$tmp/"
+  cp flake.nix "$tmp/"
   echo "-- self-test: pristine fixtures pass"
   if ROOT="$tmp" "$SCRIPT" | grep -q "ALL CLOCK POLICY CHECKS PASSED"; then
     echo "ok: fixtures pass"
@@ -91,6 +92,10 @@ check_contains nix/default.nix 'npuClockHz == 200000000' "200 MHz assertion"
 check_contains nix/npu-smoke-test.sh 'EXPECTED_HZ:=200000000' "smoke-test expected-rate default"
 check_contains nix/test.nix 'expectedHz ? 200000000' "test-package rate default"
 check_contains nix/default.nix 'expectedHz = cfg.npuClockHz' "test follows gated option"
+# The negative gate itself must survive: without it, a silently removed
+# rejection check would leave every other gate green and useless.
+check_contains flake.nix 'rate-gate-negative' "negative gate check"
+check_contains flake.nix 'mkSys 600000000' "negative test vector"
 if [ "$fail" -ne 0 ]; then
   echo "CLOCK POLICY CHECKS FAILED"
   exit 1
