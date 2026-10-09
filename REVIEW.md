@@ -155,6 +155,54 @@ loader still points at the known-good generation. Green kexec boot plus
 passing smoke/matmul gates is the precondition for switch+reboot; it
 replaces the old runbook's direct reboot step entirely.
 
+## Higher-frequency acceptance protocol (600 MHz target)
+
+Do not change the npuClockHz assertion until every gate below passes
+with recorded evidence. Work in a scratch branch; the relaxation must
+not reach pushed history before validation is complete.
+
+Gate 0 - instrumentation. Serial console attached (USB-TTL on the debug
+UART) and a known-good boot configuration retained. Identify the vdd_npu
+readback path first (probe point or regulator interface): no rail
+number, no frequency work.
+
+Gate 1 - rail measurement. With the NPU idle at 200 MHz, record vdd_npu
+at rest and under a matmul sweep. Reference points, not transferable
+blindly: the OPi 5 Pro validates 300-700 MHz at 0.70 V and 800 MHz at
+0.90 V. Proceed only if the measured CM3588 rail covers the target OPP
+with margin. A fixed rail below the OPP voltage blocks frequency work
+on hardware grounds, not software.
+
+Gate 2 - build, never deploy. Relax the assertion locally, set npuClockHz
+to the target, `nixos-rebuild build` only. Confirm the generated overlay,
+DT checks, and installed smoke expectation all carry the new rate (the
+option wiring makes this mechanical, not manual).
+
+Gate 3 - kexec rehearsal. Dry-run, then `--confirm`, per the section
+above. Any hang: power-cycle, record where the boot stopped from the
+serial log, stop the protocol.
+
+Gate 4 - validate under kexec. The smoke test must report the new rate;
+run the full matmul sweep on every core mask and compare against the
+200 MHz baselines. Tolerate only the documented lane-0 2^-16 divergences
+per the RK3588 notes. Record SoC temperature throughout, against a 200
+MHz thermal baseline taken first, so the delta is meaningful.
+
+Gate 5 - power sequencing. Suspend/resume cycle, module unload/reload at
+the new rate, and an idle gap long enough to trigger runtime suspend.
+Confirm the clock returns to a safe state on every transition - this
+driver stubs devfreq, so any failure here means implementing park-to-200
+first, not waiving the gate.
+
+Gate 6 - promote. Commit the assertion change together with the
+measurement log (rail numbers, sweep results, thermals, serial logs of
+every kexec boot). Switch with the rollback guard armed and no
+cancellation marker; reboot in a maintenance window; touch the marker
+only after the on-hardware gates repeat green.
+
+Any gate that fails stops the protocol. Record the failure next to the
+gate; do not skip gates.
+
 ## Validation limits
 
 DT compilation/application and module compilation do not exercise
