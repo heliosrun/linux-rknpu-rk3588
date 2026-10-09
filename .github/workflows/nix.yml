@@ -56,6 +56,11 @@ jobs:
       - name: Check device tree overlay (nixpkgs kernel DTBs)
         run: nix build -L .#checks.aarch64-linux.device-tree -o result-dtcheck
 
+      # Proves the NixOS module wires npuClockHz into the generated
+      # overlay (evaluates a minimal test system; eval alone never does).
+      - name: Check module overlay wiring
+        run: nix build -L .#checks.aarch64-linux.module-overlay -o result-overlay-check
+
       - name: Verify vermagic
         run: |
           KO=$(find result-module/lib/modules -name rknpu.ko)
