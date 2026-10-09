@@ -12,9 +12,9 @@ in
     enable = lib.mkEnableOption ''
       the Rockchip RKNPU NPU driver: an out-of-tree kernel module
       (vendor v0.9.8 ported to mainline) plus a device tree overlay
-      enabling the vendor rknpu@fdab0000 node at 200 MHz. Mutually
-      exclusive with the mainline rocket (accel) driver: the overlay also disables
-      the rknn_core_* nodes.
+      enabling a four-bank IOMMU and up to 1 GHz operation. Mutually
+      exclusive with the mainline rocket (accel) driver: the overlay replaces
+      core0 and disables the other rocket cores.
     '';
 
     autoload = lib.mkOption {
@@ -30,6 +30,8 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    boot.kernelPatches = [ (import ./kernel-patch.nix { inherit lib; }) ];
+
     boot.extraModulePackages = [
       (config.boot.kernelPackages.callPackage ./package.nix { })
     ];

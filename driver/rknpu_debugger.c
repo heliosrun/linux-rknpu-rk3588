@@ -13,10 +13,8 @@
 #include <linux/clk.h>
 #include <asm/div64.h>
 
-/* NOTE: vendor <../drivers/devfreq/governor.h> does not exist in mainline;
- * its only use (update_devfreq below) is dropped for the same reason. */
-
 #include "rknpu_drv.h"
+#include "rknpu_devfreq.h"
 #include "rknpu_mm.h"
 #include "rknpu_reset.h"
 #include "rknpu_debugger.h"
@@ -196,58 +194,22 @@ static int rknpu_freq_show(struct seq_file *m, void *data)
 	return 0;
 }
 
-#ifdef CONFIG_PM_DEVFREQ
 static ssize_t rknpu_freq_set(struct file *file, const char __user *ubuf,
 			      size_t len, loff_t *offp)
 {
 	struct seq_file *priv = file->private_data;
 	struct rknpu_debugger_node *node = priv->private;
-	struct rknpu_debugger *debugger = node->debugger;
 	struct rknpu_device *rknpu_dev =
-		container_of(debugger, struct rknpu_device, debugger);
-	unsigned long current_freq = 0;
-	char buf[16];
-	unsigned long freq = 0;
-	int ret = 0;
+		container_of(node->debugger, struct rknpu_device, debugger);
+	unsigned long freq;
+	int ret;
 
-	if (len > sizeof(buf) - 1)
-		return -EINVAL;
-	if (copy_from_user(buf, ubuf, len))
-		return -EFAULT;
-	buf[len - 1] = '\0';
-
-	ret = kstrtoul(buf, 10, &freq);
-	if (ret) {
-		LOG_ERROR("failed to parse freq string: %s\n", buf);
-		return -EFAULT;
-	}
-
-	if (!rknpu_dev->devfreq)
-		return -EFAULT;
-
-	ret = rknpu_power_get(rknpu_dev);
+	ret = kstrtoul_from_user(ubuf, len, 10, &freq);
 	if (ret)
 		return ret;
-
-	current_freq = clk_get_rate(rknpu_dev->clks[0].clk);
-	if (freq != current_freq) {
-		rknpu_dev->ondemand_freq = freq;
-		/* NOTE: update_devfreq() no longer exists in mainline devfreq
-		 * core; the governor re-evaluates on its own polling. The
-		 * ondemand_freq value above is still honored when present. */
-	}
-
-	rknpu_power_put(rknpu_dev);
-
-	return len;
+	ret = rknpu_devfreq_set_rate(rknpu_dev, freq);
+	return ret ? ret : len;
 }
-#else
-static ssize_t rknpu_freq_set(struct file *file, const char __user *ubuf,
-			      size_t len, loff_t *offp)
-{
-	return -EFAULT;
-}
-#endif
 
 static int rknpu_volt_show(struct seq_file *m, void *data)
 {

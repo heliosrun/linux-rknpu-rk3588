@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Apply the NixOS DT overlay to a pristine mainline DTB and assert the
-# resulting tree: vendor node at 200 MHz, rocket cores and IOMMUs off.
+# resulting tree: powered OPP operation and one four-bank IOMMU.
 # Usage: check-dt-overlay.sh <linux-dir> <overlay-dts> [jobs]
 set -euo pipefail
 # Absolutize first: relative paths would break after the cd below
@@ -8,9 +8,9 @@ set -euo pipefail
 LINUX_DIR="$(cd "${1:?usage: check-dt-overlay.sh <linux-dir> <overlay-dts> [jobs]}" && pwd)"
 OVERLAY_DTS="$(cd "$(dirname "${2:?usage: check-dt-overlay.sh <linux-dir> <overlay-dts> [jobs]}")" && pwd)/$(basename "${2}")"
 JOBS="${3:-$(nproc)}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DTC=$(command -v dtc)
 FDTOVERLAY=$(command -v fdtoverlay)
-FDTGET=$(command -v fdtget)
 INC="$LINUX_DIR/scripts/dtc/include-prefixes"
 cd "$LINUX_DIR"
 gcc -E -nostdinc -I"$INC" -undef -D__DTS__ -x assembler-with-cpp \
@@ -24,35 +24,5 @@ BASE=build/arch/arm64/boot/dts/rockchip/rk3588-friendlyelec-cm3588-nas.dtb
 # are no-ops. Do not "optimize".
 make ARCH=arm64 O=build DTC_FLAGS="-@" -j"$JOBS" dtbs
 $FDTOVERLAY -i "$BASE" -o /tmp/board-applied.dtb /tmp/rknpu.dtbo
-check() {
-  got=$($FDTGET /tmp/board-applied.dtb "$1" "$2")
-  if [ "$got" != "$3" ]; then
-    echo "FAIL: $1 $2 mismatch (see values above)"
-    exit 1
-  fi
-  echo "ok: $1 $2 = $got"
-}
-check /rknpu@fdab0000 status okay
-check /rknpu@fdab0000 compatible rockchip,rk3588-rknpu
-# Clock defaults are applied with the NPU domains still off.
-check /rknpu@fdab0000 assigned-clock-rates 200000000
-# Non-IOMMU mode: the node must have NO iommus property and the
-# merged mmu device must not exist (the mainline rockchip-iommu
-# driver cannot drive the 4-window device - see REVIEW.md Finding 1b).
-if $FDTGET /tmp/board-applied.dtb /rknpu@fdab0000 iommus >/dev/null 2>&1; then
-  echo "FAIL: iommus present but non-iommu mode expected"
-  exit 1
-fi
-echo "ok: /rknpu@fdab0000 has no iommus (non-iommu mode)"
-if $FDTGET /tmp/board-applied.dtb /rknpu-mmu@fdab9000 status >/dev/null 2>&1; then
-  echo "FAIL: merged rknpu-mmu node exists"
-  exit 1
-fi
-echo "ok: no merged rknpu-mmu node"
-check /npu@fdab0000 status disabled
-check /npu@fdac0000 status disabled
-check /npu@fdad0000 status disabled
-check /iommu@fdab9000 status disabled
-check /iommu@fdaca000 status disabled
-check /iommu@fdada000 status disabled
-echo "ALL DT CHECKS PASSED"
+python3 "$SCRIPT_DIR/check-applied-dt.py" /tmp/board-applied.dtb "$BASE"
+python3 "$SCRIPT_DIR/test-dt-check.py" /tmp/board-applied.dtb "$BASE"

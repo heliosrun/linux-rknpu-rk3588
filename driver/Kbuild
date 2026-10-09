@@ -2,7 +2,7 @@
 # Kbuild object list for the mainline-ported Rockchip RKNPU driver
 # (v0.9.8). Mirrors the in-tree drivers/rknpu/Makefile on the
 # rknpu-rk3588 branch: the vendor OPP/monitor framework has no mainline
-# equivalent, so rknpu_devfreq.o is replaced by the failsafe stub, and
+# equivalent, so rknpu_devfreq.o uses mainline OPP/devfreq APIs, and
 # rknpu_mem.o (DMA_HEAP) / rknpu_mm.o (SRAM) stay excluded (DRM_GEM only).
 
 obj-m += rknpu.o
@@ -14,7 +14,7 @@ rknpu-y += rknpu_debugger.o
 rknpu-y += rknpu_iommu.o
 rknpu-y += rknpu_gem.o
 rknpu-y += rknpu_fence.o
-rknpu-y += rknpu_devfreq_stub.o
+rknpu-y += rknpu_devfreq.o
 
 ccflags-y += -I$(src)/include
 

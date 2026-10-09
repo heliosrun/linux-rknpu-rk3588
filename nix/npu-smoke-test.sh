@@ -28,10 +28,10 @@ else
 fi
 
 if dmesg >/dev/null 2>&1; then
-  if dmesg | grep -qi "non-iommu mode"; then
-    pass "driver reports non-iommu mode (expected: overlay has no iommus)"
-  elif dmesg | grep -qi "using iommu mode"; then
-    oops "driver in iommu mode (overlay unexpectedly carries iommus)"
+  if dmesg | grep -qi "using iommu mode"; then
+    pass "driver reports IOMMU mode"
+  elif dmesg | grep -qi "non-iommu mode"; then
+    oops "driver reports non-IOMMU mode; check the kernel patch and overlay"
   else
     oops "no rknpu iommu-mode line in dmesg"
   fi
@@ -45,15 +45,26 @@ for g in /sys/kernel/iommu_groups/*/devices/*fdab0000*; do
   grp=$(echo "$g" | cut -d/ -f5)
 done
 if [ -z "$grp" ]; then
-  pass "fdab0000.npu in no IOMMU group (non-iommu mode: expected)"
+  oops "fdab0000.npu has no IOMMU group"
 else
-  note "fdab0000.npu in iommu group $grp (unexpected with this overlay; informational)"
+  pass "fdab0000.npu in iommu group $grp"
 fi
 
 # clk_summary reads rates for all clocks, including SCMI PVTPLLs.
 # Some firmware accesses powered-off islands on rate reads; do not
 # perform that global hardware query in an otherwise passive smoke test.
-note "clock readback skipped; DT bring-up checks require the 200 MHz GPLL rate"
+# This driver's frequency reader resumes the full clock/domain bulk first.
+# Never substitute a global clk_summary read for this powered query.
+if [ -r /sys/kernel/debug/rknpu/freq ]; then
+  freq=$(cat /sys/kernel/debug/rknpu/freq)
+  case "$freq" in
+    200000000|300000000|400000000|500000000|600000000|700000000|800000000|900000000|1000000000)
+      pass "powered NPU rate $freq Hz (may be thermally capped)" ;;
+    *) oops "unexpected NPU rate $freq" ;;
+  esac
+else
+  note "powered frequency read unavailable; mount debugfs as root to inspect it"
+fi
 
 if [ "$fail" = "0" ]; then echo "ALL SMOKE CHECKS PASSED"; else echo "SMOKE CHECKS FAILED"; fi
 exit $fail

@@ -3,6 +3,7 @@
   stdenv,
   kernel,
   dtc,
+  python3,
 }:
 
 stdenv.mkDerivation {
@@ -12,7 +13,7 @@ stdenv.mkDerivation {
   # No unpack: the overlay is referenced straight from the flake source.
   dontUnpack = true;
 
-  nativeBuildInputs = [ dtc ];
+  nativeBuildInputs = [ dtc python3 ];
 
   buildCommand = ''
     set -euo pipefail
@@ -55,36 +56,8 @@ stdenv.mkDerivation {
 
     # Full node-state assertions on the production board DTB.
     OUT=applied-$BOARD
-    check() {
-      got=$(fdtget "$OUT" "$1" "$2")
-      if [ "$got" != "$3" ]; then
-        echo "FAIL: check failed"
-        exit 1
-      fi
-      echo "ok: $1 $2 = $got"
-    }
-    check /rknpu@fdab0000 status okay
-    check /rknpu@fdab0000 compatible rockchip,rk3588-rknpu
-    # Clock defaults are applied with the NPU domains still off.
-    check /rknpu@fdab0000 assigned-clock-rates 200000000
-    # Non-IOMMU mode: the node must have NO iommus property and the
-    # merged mmu device must not exist (the mainline rockchip-iommu
-    # driver cannot drive the 4-window device - see overlay.dts).
-    if fdtget "$OUT" /rknpu@fdab0000 iommus >/dev/null 2>&1; then
-      echo "FAIL: iommus present but non-iommu mode expected"; exit 1
-    fi
-    echo "ok: /rknpu@fdab0000 has no iommus (non-iommu mode)"
-    if fdtget "$OUT" /rknpu-mmu@fdab9000 status >/dev/null 2>&1; then
-      echo "FAIL: merged rknpu-mmu node exists"; exit 1
-    fi
-    echo "ok: no merged rknpu-mmu node"
-    check /npu@fdab0000 status disabled
-    check /npu@fdac0000 status disabled
-    check /npu@fdad0000 status disabled
-    check /iommu@fdab9000 status disabled
-    check /iommu@fdaca000 status disabled
-    check /iommu@fdada000 status disabled
-    echo "ALL DT CHECKS PASSED"
+    python3 ${../scripts/check-applied-dt.py} "$OUT" "$DTBS/$BOARD"
+    python3 ${../scripts/test-dt-check.py} "$OUT" "$DTBS/$BOARD" ${../scripts/check-applied-dt.py}
 
     mkdir -p $out
     cp "$OUT" $out/board-applied.dtb

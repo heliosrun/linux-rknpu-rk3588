@@ -8,6 +8,7 @@
 #define __LINUX_RKNPU_DRV_H_
 
 #include <linux/completion.h>
+#include <linux/devfreq.h>
 #include <linux/device.h>
 #include <linux/kref.h>
 #include <linux/irq.h>
@@ -18,10 +19,6 @@
 #include <linux/hrtimer.h>
 #include <linux/miscdevice.h>
 
-/* NOTE: vendor soc/rockchip headers removed - only rknpu_devfreq.c needs
- * them and it is excluded from this build (PM_DEVFREQ off, fixed clock).
- * Minimal replacements live in rknpu_soc_compat.h. Re-add with
- * vendor headers if devfreq support is ever enabled. */
 #include "../rknpu_soc_compat.h"
 
 #include "rknpu_job.h"
@@ -139,14 +136,17 @@ struct rknpu_device {
 	int num_clks;
 	struct regulator *vdd;
 	struct regulator *mem;
-	struct monitor_dev_info *mdev_info;
-	struct ipa_power_model_data *model_data;
 	struct thermal_cooling_device *devfreq_cooling;
 	struct devfreq *devfreq;
-	unsigned long ondemand_freq;
-	struct rockchip_opp_info opp_info;
+	struct devfreq_dev_profile devfreq_profile;
+	struct mutex freq_lock;
+	bool opp_ready;
+	bool frequency_active;
+	bool frequency_fault;
+	bool power_enabled;
+	bool shutting_down;
+	bool ready;
 	unsigned long current_freq;
-	unsigned long current_volt;
 	int bypass_irq_handler;
 	int bypass_soft_reset;
 	bool soft_reseting;
@@ -154,6 +154,7 @@ struct rknpu_device {
 	struct device *genpd_dev_npu1;
 	struct device *genpd_dev_npu2;
 	bool multiple_domains;
+	struct dev_pm_domain_list *power_domains;
 	atomic_t power_refcount;
 	atomic_t cmdline_power_refcount;
 	struct delayed_work power_off_work;

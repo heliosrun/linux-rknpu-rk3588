@@ -5,7 +5,7 @@ set -euo pipefail
 LINUX_DIR="${1:?usage: build-module.sh <linux-dir> <driver-dir> [jobs]}"
 DRIVER_DIR="${2:?usage: build-module.sh <linux-dir> <driver-dir> [jobs]}"
 JOBS="${3:-$(nproc)}"
-if command -v ccache >/dev/null 2>&1; then CC="ccache gcc"; else CC="cc"; fi
+if command -v ccache >/dev/null 2>&1; then CC="ccache ${CROSS_COMPILE:-}gcc"; else CC="${CROSS_COMPILE:-}gcc"; fi
 cd "$LINUX_DIR"
 make ARCH=arm64 O=build CC="$CC" -j"$JOBS" M="$DRIVER_DIR" modules
 test -f "$DRIVER_DIR/rknpu.ko"

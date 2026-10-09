@@ -1,146 +1,144 @@
-# RKNPU bring-up review: clock and power sequencing
+# RK3588 RKNPU: 1 GHz OPPs and shared IOMMU
 
-This review describes the conservative bring-up changes in the source.
-It is not a claim that this revision has been booted or tested on the
-production CM3588. The deployed DTB, BL31 build, and a boot trace are
-still needed to establish the exact historical failure.
+This implementation has build and merged-DT validation, not CM3588 hardware
+validation. A deployed BL31 binary, cold-boot trace and workload/lifecycle
+results are still required. Firmware source establishes supported operations;
+it does not establish which firmware a particular board runs.
 
-## Critical: a 600 MHz DT clock default can hang boot
+## Firmware maximum and clock sequencing
 
-Linux v7.2's `platform_probe()` applies `of_clk_set_defaults()` before
-`dev_pm_domain_attach()` and before calling the driver's probe:
+TF-A **v2.12.0**, commit `4ec2948fe3f65dba2f19e691e702f7de2949179c`, defines
+RK3588's NPU clock data in C rather than a firmware device tree:
 
-```
-platform_probe()
-  of_clk_set_defaults()      # applies assigned-clock-rates
-  dev_pm_domain_attach()
-  rknpu_probe()
-    attach the NPU domains
-    rknpu_power_on()
-```
+- [NPU PVTPLL table](https://github.com/ARM-software/arm-trusted-firmware/blob/4ec2948fe3f65dba2f19e691e702f7de2949179c/plat/rockchip/rk3588/drivers/scmi/rk3588_clk.c#L245):
+  200 through **1000 MHz**; 1 GHz uses ring select 1 and length 12.
+- [NPU rate programming](https://github.com/ARM-software/arm-trusted-firmware/blob/4ec2948fe3f65dba2f19e691e702f7de2949179c/plat/rockchip/rk3588/drivers/scmi/rk3588_clk.c#L1044):
+  200 MHz uses GPLL; higher rates write the NPU-local PVTPLL via NPU GRF.
+- [SCMI clock registration](https://github.com/ARM-software/arm-trusted-firmware/blob/4ec2948fe3f65dba2f19e691e702f7de2949179c/plat/rockchip/rk3588/drivers/scmi/rk3588_clk.c#L2347):
+  the NPU exposes the shared 200 MHz–1 GHz rate list. Low-bit flags in the
+  final table entry do not advertise an overclock above 1 GHz.
 
-Sources:
+Linux applies DT clock defaults before power-domain attachment and driver
+probe. The overlay therefore uses `assigned-clock-rates = <0>` to skip early
+SCMI rate programming, including a later rebind. Zero is not a zero-Hz rate.
+The driver parks at 200 MHz only after all domains and clocks are available.
 
-- [Linux v7.2 platform probe ordering](https://github.com/torvalds/linux/blob/v7.2/drivers/base/platform.c#L1429-L1440)
-- [Linux v7.2 clock-default implementation](https://github.com/torvalds/linux/blob/v7.2/drivers/clk/clk-conf.c)
-- [TF-A v2.12.0 RK3588 NPU clock implementation](https://github.com/ARM-software/arm-trusted-firmware/blob/v2.12.0/plat/rockchip/rk3588/drivers/scmi/rk3588_clk.c#L1044-L1090)
-- [Independent RK3588 clock/power hardware observations](https://github.com/gregordinary/rockchip-npu-notes/blob/main/perf/clock.md#raising-the-clock-on-an-unpowered-domain)
+The complete clock bulk includes all three cores' ACLK/HCLK gates and
+`PCLK_NPU_ROOT`, `PCLK_NPU_GRF`, the NPU PVTM clocks and `HCLK_NPU_ROOT`.
+These remain enabled across every frequency change. The supplied Orange Pi
+reference demonstrates why merely changing a boot-time clock default is not
+sufficient:
 
-TF-A's rate table uses the GPLL path at 200 MHz. At 600 MHz,
-`clk_npu_set_rate()` instead writes PVTPLL registers through
-`NPUGRF_BASE`, inside the NPU island. Programming that clock with the
-island off can wedge secure firmware in the SCMI/SMC call. This can
-happen before `rknpu_probe()` logs anything, and is not an ordinary
-probe failure that merely leaves the NPU unavailable.
+- [Reference overlay and OPPs](https://github.com/ULTIMATE215/OrangePi5Plus/blob/ac58828d78fcfdcda4674ec6201e985fb26a99e7/npu-patches/rk3588-rknpu-mc-4bank.dts)
+- [Reference devfreq implementation](https://github.com/ULTIMATE215/OrangePi5Plus/blob/ac58828d78fcfdcda4674ec6201e985fb26a99e7/npu-patches/rknpu_devfreq.c)
+- [Reference pre-bind domain/clock pins](https://github.com/ULTIMATE215/OrangePi5Plus/blob/ac58828d78fcfdcda4674ec6201e985fb26a99e7/npu-patches/rknpu-multicore.patch)
 
-The overlay now requests **200 MHz**, and both DT checks assert that
-value. The in-tree reference uses the same safe default. The actual
-production firmware's implementation must still be checked; the
-TF-A source is evidence of the mechanism, not proof of which binary
-the board runs.
+## Voltage and mainline OPP/devfreq
 
-### Removing devfreq also removed required power-down handling
+The overlay reuses the original core0 node at `/npu@fdab0000`, preserving the
+board's `npu-supply` and `sram-supply` phandles. On CM3588 the rail is
+`vdd_npu_s0`, capped at **950000 microvolts** by the upstream board DT. The
+power domain also holds a consumer of that same regulator.
 
-The build links `rknpu_devfreq_stub.o`, not `rknpu_devfreq.o`. The
-vendor implementation parks the SCMI clock at `POWER_DOWN_FREQ`
-(200 MHz) during runtime suspend and restores its operating rate
-once powered. The stub callbacks do neither.
+The OPP table uses conservative reference voltages: 200/300/400 MHz at
+800 mV, then 825/850/875/900/925/950 mV at 500/600/700/800/900/1000 MHz.
+The OPP framework rejects points unsupported by the board's regulator, and
+the driver disables points that SCMI would round to a different rate. The
+performance governor selects the maximum remaining point, up to 1 GHz.
+Voltage is raised before frequency and lowered after frequency.
 
-Probe itself powers the NPU down before returning. Consequently,
-raising the clock just once in probe would not solve the complete
-problem: the next power-up could occur with an unsafe clock source.
+These voltages were reported working on an Orange Pi 5 Plus. They are **not**
+a CM3588 qualification result. The mainline port does not reproduce BSP
+silicon-bin selection, voltage-dependent memory read margins or
+low-temperature voltage calibration. Those remain hardware validation risks.
 
-Higher rates remain unsupported by this fixed-rate port. Before
-adding them, implement and validate all of the following:
+A devfreq cooling device is connected to the NPU thermal zone, with a passive
+85 °C trip and 5 °C hysteresis. The upstream 115 °C critical trip remains.
+Cooling and userspace `max_freq` limits bound the performance governor.
+Debugfs frequency writes and `RKNPU_SET_FREQ` accept exact supported OPPs and
+set the userspace ceiling; they cannot override thermal QoS constraints.
 
-1. Power the required domains at the safe boot rate.
-2. Establish a board-validated voltage before raising frequency.
-3. Raise the shared clock only while its required islands are on.
-4. Return to 200 MHz before domain power-down, including error paths,
-   remove, shutdown, and system-sleep transitions.
-5. Serialize shared-clock changes against jobs and domain transitions.
+## Complete power lifecycle
 
-Do not implement higher-rate operation by changing
-`assigned-clock-rates` in either DT file.
+The workload frequency is stored separately from the physical parked rate:
 
-## Other implemented corrections
+1. Enable regulator/clock references and resume all core domains.
+2. Restore the remembered OPP while powered, then allow work.
+3. On idle, force the physical clock to 200 MHz before lowering voltage.
+4. Update the OPP core to the parking point, then release its regulator
+   reference. This prevents its cached OPP from skipping a later restore.
+5. Release runtime-PM, domain, ordinary-clock and driver regulator references.
 
-### Power-domain failures
+The frequency mutex serializes devfreq changes with runtime suspend/resume.
+QoS changes while powered off only change the remembered workload rate; they
+perform no clock or regulator accesses. A failed OPP transition blocks new
+power acquisitions until a successful parking/recovery cycle. Resume failures
+attempt parking before unwinding. A failed park returns an error and retains
+physical power/clock references; probe/remove cleanup deliberately retains
+those references if recovery also fails. This can leak references and require
+recovery, but does not intentionally power down an unsafe PVTPLL island.
 
-Every required named attachment in multi-domain mode must return a
-valid virtual device. Errors, including `-EPROBE_DEFER`, now propagate
-instead of being ignored; NULL attachments fail with `-ENODEV`.
-Partially attached domains are detached and runtime PM is disabled
-on the relevant probe error paths.
+Remove powers down before removing devfreq. System sleep rejects outstanding
+jobs, balances its temporary PM reference, and restores frequency before
+releasing that reference on resume. Shutdown prevents new power acquisitions,
+waits for jobs to drain, and parks before teardown. A shutdown timeout retains
+power after attempting to park. These paths require physical-board tests;
+returning an error cannot recover an already wedged SCMI firmware call.
 
-Power-up uses `pm_runtime_resume_and_get()` to normalize successful
-returns and balance failed gets. Failures unwind the domains,
-clocks, and regulators already acquired. A failed `rknpu_power_get()`
-also rolls back its private reference count, and callers do not
-submit ioctls or query clocks after a failed resume.
+## Four-bank IOMMU supplier dependencies
 
-### Optional regulator queries
+One logical translation device covers:
 
-On upstream CM3588, the parent NPU domain has
-`domain-supply = <&vdd_npu_s0>`:
+| Bank | Core | Register window |
+| --- | --- | --- |
+| 0 | 0 | `0xfdab9000` |
+| 1 | 0 | `0xfdaba000` |
+| 2 | 1 | `0xfdaca000` |
+| 3 | 2 | `0xfdada000` |
 
-- [Linux v7.2 CM3588 board include](https://github.com/torvalds/linux/blob/v7.2/arch/arm64/boot/dts/rockchip/rk3588-friendlyelec-cm3588.dtsi)
-- [Linux v7.2 Rockchip power-domain implementation](https://github.com/torvalds/linux/blob/v7.2/drivers/pmdomain/rockchip/pm-domains.c)
+A single `iommus` phandle maps all cores through one DMA page table. Three
+separate phandles would bind the mainline driver's last translation device
+and leave other cores outside that mapping. The driver rejects unsupported
+RK3588 IOMMU topologies instead of silently permitting multicore DMA.
 
-Thus the rail can be controlled by genpd without an `rknpu-supply`
-on the vendor node. The driver's optional `vdd` pointer is then
-NULL. The voltage ioctl and debugfs reader now return `-ENODEV`
-instead of passing NULL to `regulator_get_voltage()`. Other regulator
-read errors also propagate without being converted to unsigned
-voltage values. This does not add voltage scaling or duplicate the
-power-domain regulator consumer.
+`linux-integration/rk3588-npu-iommu.patch` adds a dedicated
+`rockchip,rk3588-rknpu-iommu` compatible. Its supplier gets all six bus clocks
+and attaches all three domains with runtime-PM device links. Supplier resume
+can run **before** the RKNPU probe; its own links power every bank in that
+case. Its own clocks cover register/IRQ/TLB operations. Supplier suspend may
+complete asynchronously after the consumer releases a reference, but its
+links keep the domains powered until its MMU register accesses finish.
+No RKNPU module-init domain pins or separate housekeeping-clock module are
+used. An unpatched kernel cannot bind this compatible, preventing an unsafe
+fallback to the stock two-clock supplier.
 
-### Smoke-test contract
+The NPU register mappings end at `0x9000`, before the MMU windows. Other rocket
+cores and standalone MMUs are disabled. NixOS and flake builds apply the
+companion patch and required kernel configuration; manual builds must rebuild
+the patched kernel, not just replace `rknpu.ko`.
 
-Kbuild enables DRM/GEM and excludes DMA_HEAP. The required userspace
-interface is a character device at `/dev/dri/renderD*` bound to
-`RKNPU`. `/dev/rknpu` is informational only: it is a misc device in
-DMA_HEAP builds or a host-provided compatibility symlink.
+## Validation and remaining board gates
 
-The overlay deliberately omits `iommus` and disables the rocket cores
-and their MMUs. Non-IOMMU mode is therefore expected; it provides no
-NPU DMA isolation. Restoring IOMMU support requires a separate topology,
-clock, and power-sequencing review.
+Build validation must cover the patched kernel and linked ARM64 module.
+Merged-DT checks assert the clock default, voltage points, four MMU windows,
+shared phandle, six MMU clocks, three domains, board supplies and thermal map.
+Five negative regression tests reject unsafe tree mutations.
 
-The smoke test no longer reads global `clk_summary`. That reads all
-clock rates, potentially causing firmware to access powered-off
-PVTPLL islands. It is not a passive or universally safe diagnostic.
-The DT build checks verify the configured rate, not hardware readback.
+Before deployment, retain a known-good kernel/DTB and independent recovery:
 
-## Headless validation and recovery
+1. Confirm the actual BL31/SCMI firmware and supported rate list, regulator
+   limits and cooling. Use `hardware.rknpu.autoload = false` initially.
+2. Cold-boot the matching patched kernel and overlay, establish SSH, then
+   manually load the module. A load without the new DT does not test probe.
+3. Run `npu-smoke-test`, then all eight `rknpu-test` cases (two shapes on
+   each core and on all cores) at the selected maximum and lower ceilings.
+4. Exercise repeated idle power-off/resume, unload/reload, shutdown/reboot,
+   system sleep, thermal throttling, and injected clock/regulator errors.
+5. Validate NPU memory correctness and IOMMU faults on every core; measure
+   voltage, temperature and stability at 1 GHz across operating conditions.
 
-1. Prepare an independently tested recovery path (UART, recovery media,
-   or out-of-band access) and retain a known-good boot configuration.
-2. Rebuild the module and DT checks against the consuming kernel.
-   Inspect the resulting CM3588 DTB: vendor node at 200 MHz, no
-   `iommus`, rocket cores and MMUs disabled. Confirm the deployed
-   bootloader actually selects that DTB.
-3. Set `hardware.rknpu.autoload = false` for the first boot. This
-   suppresses this module's explicit boot load; remove any separate
-   host configuration that also requests RKNPU. The package and
-   overlay remain installed.
-4. Cold-boot the corrected DTB. Establish SSH before manually loading
-   `rknpu`, with remote logging available. A load against the old DTB
-   with no vendor node checks linking, not hardware probe safety.
-5. Run `npu-smoke-test` and `rknpu-test`. The runner performs eight
-   checks: two shapes on each of three cores and on all cores.
-6. Validate idle power-down, later resume, and module unload/reload at
-   200 MHz. Test system sleep only with a reliable recovery path.
-7. Enable normal NPU workloads and autoload only after those gates pass.
-
-A systemd rollback timer can help with a running but broken system;
-it cannot guarantee recovery from an EL3/SCMI firmware hang. This repo
-does not install a rollback timer. Warm kexec preserves hardware state
-and is not evidence that the same DTB is safe on a cold boot.
-
-## Validation limits
-
-DT compilation/application and module compilation do not exercise
-firmware MMIO or runtime PM. The implementation must pass both existing
-CI builds and hardware validation before deployment. Source-level
-checks are useful regression guards, not substitutes for those tests.
+Do not read global `clk_summary`: it can query powered-off PVTPLL islands.
+The driver's debugfs frequency reader explicitly powers the NPU first. UART,
+recovery media or another independent recovery path is necessary for hardware
+bring-up; a software rollback timer cannot recover an EL3/SCMI hang. Warm
+kexec is not evidence of cold-boot safety. Enable autoload after these gates.

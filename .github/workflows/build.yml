@@ -89,18 +89,18 @@ jobs:
           restore-keys: |
             ccache-${{ env.KERNEL_REF }}-
 
-      # Pure out-of-tree build against a pristine kernel: no patching.
+      # Pure out-of-tree build against the kernel with the bundled IOMMU patch.
       # "all" = vmlinux + modules in one correctly ordered pass; the
       # modules pass needs vmlinux.symvers (built-in symbol exports) for
       # its modpost, and produces Module.symvers for our external link.
-      - name: Build pristine kernel (vmlinux + modules)
+      - name: Build IOMMU-patched kernel (vmlinux + modules)
         run: ./rknpu/scripts/build-kernel.sh linux
 
       - name: Build and verify rknpu module (out-of-tree)
         run: ./rknpu/scripts/build-module.sh linux "${{ github.workspace }}/rknpu/driver"
 
       # Apply the NixOS overlay to a pristine mainline DTB: proves the
-      # overlay disables the rocket cores and creates the vendor node,
+      # overlay replaces rocket with the vendor driver and shared IOMMU,
       # against unmodified upstream DTs.
       - name: Check device tree overlay
         run: ./rknpu/scripts/check-dt-overlay.sh linux "${{ github.workspace }}/rknpu/nix/overlay.dts"

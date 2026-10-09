@@ -59,8 +59,6 @@
 #endif
 
 #define POWER_DOWN_FREQ 200000000
-#define NPU_MMU_DISABLED_POLL_PERIOD_US 1000
-#define NPU_MMU_DISABLED_POLL_TIMEOUT_US 20000
 
 static int bypass_irq_handler;
 module_param(bypass_irq_handler, int, 0644);
@@ -372,11 +370,20 @@ int rknpu_power_get(struct rknpu_device *rknpu_dev)
 	int ret = 0;
 
 	mutex_lock(&rknpu_dev->power_lock);
+	if (!READ_ONCE(rknpu_dev->ready)) {
+		ret = -EAGAIN;
+		goto out;
+	}
+	if (READ_ONCE(rknpu_dev->frequency_fault) || rknpu_dev->shutting_down) {
+		ret = -EIO;
+		goto out;
+	}
 	if (atomic_inc_return(&rknpu_dev->power_refcount) == 1) {
 		ret = rknpu_power_on(rknpu_dev);
 		if (ret)
 			atomic_dec(&rknpu_dev->power_refcount);
 	}
+out:
 	mutex_unlock(&rknpu_dev->power_lock);
 
 	return ret;
@@ -436,6 +443,7 @@ static int rknpu_action(struct rknpu_device *rknpu_dev,
 		ret = 0;
 		break;
 	case RKNPU_SET_FREQ:
+		ret = rknpu_devfreq_set_rate(rknpu_dev, args->value);
 		break;
 	case RKNPU_GET_VOLT:
 #ifndef FPGA_PLATFORM
@@ -858,6 +866,40 @@ static bool rknpu_is_iommu_enable(struct device *dev)
 	return true;
 }
 
+static int rknpu_validate_iommu(struct device *dev)
+{
+	static const resource_size_t banks[] = {
+		0xfdab9000, 0xfdaba000, 0xfdaca000, 0xfdada000,
+	};
+	struct of_phandle_args args;
+	struct resource res;
+	int i, ret = -EINVAL;
+
+	if (!of_device_is_compatible(dev->of_node, "rockchip,rk3588-rknpu"))
+		return 0;
+	if (of_count_phandle_with_args(dev->of_node, "iommus", "#iommu-cells") != 1)
+		return -EINVAL;
+	if (of_parse_phandle_with_args(dev->of_node, "iommus", "#iommu-cells",
+				       0, &args))
+		return -EINVAL;
+	if (!of_device_is_compatible(args.np, "rockchip,rk3588-rknpu-iommu"))
+		goto out;
+	for (i = 0; i < ARRAY_SIZE(banks); i++) {
+		if (of_address_to_resource(args.np, i, &res) ||
+		    res.start != banks[i] || resource_size(&res) != 0x100)
+			goto out;
+	}
+	ret = 0;
+out:
+	of_node_put(args.np);
+	return ret;
+}
+
+static void rknpu_put_iommu_group(void *data)
+{
+	iommu_group_put(data);
+}
+
 #ifdef CONFIG_ROCKCHIP_RKNPU_DRM_GEM
 static int drm_fake_dev_register(struct rknpu_device *rknpu_dev)
 {
@@ -948,6 +990,9 @@ static int rknpu_power_on(struct rknpu_device *rknpu_dev)
 	struct device *dev = rknpu_dev->dev;
 	int ret;
 
+	if (rknpu_dev->power_enabled)
+		return rknpu_dev->frequency_fault ? -EIO : 0;
+
 #ifndef FPGA_PLATFORM
 	if (rknpu_dev->vdd) {
 		ret = regulator_enable(rknpu_dev->vdd);
@@ -972,15 +1017,11 @@ static int rknpu_power_on(struct rknpu_device *rknpu_dev)
 		goto err_disable_regulators;
 	}
 
-#ifndef FPGA_PLATFORM
-	rknpu_devfreq_lock(rknpu_dev);
-#endif
-
 	if (rknpu_dev->multiple_domains) {
 		ret = pm_runtime_resume_and_get(rknpu_dev->genpd_dev_npu0);
 		if (ret) {
 			LOG_DEV_ERROR(dev, "failed to resume npu0: %d\n", ret);
-			goto err_unlock;
+			goto err_disable_clocks;
 		}
 
 		ret = pm_runtime_resume_and_get(rknpu_dev->genpd_dev_npu1);
@@ -998,19 +1039,22 @@ static int rknpu_power_on(struct rknpu_device *rknpu_dev)
 		}
 	}
 
+	rknpu_dev->power_enabled = true;
 	/* Normalizes successful resumes to zero and balances failed gets. */
 	ret = pm_runtime_resume_and_get(dev);
 	if (ret) {
 		LOG_DEV_ERROR(dev, "failed to resume rknpu: %d\n", ret);
+		if (READ_ONCE(rknpu_dev->frequency_fault))
+			return ret;
+		/* Clear the PM core's sticky resume error after clock recovery. */
+		pm_runtime_set_suspended(dev);
+		rknpu_dev->power_enabled = false;
 		goto err_put_npu2;
 	}
 
 	if (rknpu_dev->config->state_init)
 		rknpu_dev->config->state_init(rknpu_dev);
 
-#ifndef FPGA_PLATFORM
-	rknpu_devfreq_unlock(rknpu_dev);
-#endif
 	return 0;
 
 err_put_npu2:
@@ -1022,10 +1066,7 @@ err_put_npu1:
 err_put_npu0:
 	if (rknpu_dev->genpd_dev_npu0)
 		pm_runtime_put_sync(rknpu_dev->genpd_dev_npu0);
-err_unlock:
-#ifndef FPGA_PLATFORM
-	rknpu_devfreq_unlock(rknpu_dev);
-#endif
+err_disable_clocks:
 	clk_bulk_disable_unprepare(rknpu_dev->num_clks, rknpu_dev->clks);
 err_disable_regulators:
 #ifndef FPGA_PLATFORM
@@ -1041,62 +1082,50 @@ err_disable_vdd:
 static int rknpu_power_off(struct rknpu_device *rknpu_dev)
 {
 	struct device *dev = rknpu_dev->dev;
-
-#ifndef FPGA_PLATFORM
 	int ret;
-	bool val;
 
-	rknpu_devfreq_lock(rknpu_dev);
-#endif
+	if (!rknpu_dev->power_enabled)
+		return 0;
 
-	pm_runtime_put_sync(dev);
-
-	if (rknpu_dev->multiple_domains) {
-#ifndef FPGA_PLATFORM
-		/*
-		 * Because IOMMU's runtime suspend callback is asynchronous,
-		 * So it may be executed after the NPU is turned off after PD/CLK/VD,
-		 * and the runtime suspend callback has a register access.
-		 * If the PD/VD/CLK is closed, the register access will crash.
-		 * As a workaround, it's safe to close pd stuff until iommu disabled.
-		 * If pm runtime framework can handle this issue in the future, remove
-		 * this.
-		 */
-		ret = readx_poll_timeout(rockchip_iommu_is_enabled, dev, val,
-					 !val, NPU_MMU_DISABLED_POLL_PERIOD_US,
-					 NPU_MMU_DISABLED_POLL_TIMEOUT_US);
-		if (ret) {
-			LOG_DEV_ERROR(dev, "iommu still enabled\n");
-			pm_runtime_get_sync(dev);
-			rknpu_devfreq_unlock(rknpu_dev);
+	/* Runtime suspend parks the clock while ALL domains/clocks are still
+	 * held. A rejected suspend must not be followed by a physical power-off.
+	 */
+	if (pm_runtime_active(dev)) {
+		ret = pm_runtime_put_sync_suspend(dev);
+		if (ret < 0) {
+			/* Parking failed with physical references still held. Keep
+			 * the PM reference and permit a later parking retry.
+			 */
+			pm_runtime_set_active(dev);
+			pm_runtime_get_noresume(dev);
 			return ret;
 		}
-#else
-		if (rknpu_dev->iommu_en)
-			msleep(20);
-#endif
-		if (rknpu_dev->genpd_dev_npu2)
-			pm_runtime_put_sync(rknpu_dev->genpd_dev_npu2);
-		if (rknpu_dev->genpd_dev_npu1)
-			pm_runtime_put_sync(rknpu_dev->genpd_dev_npu1);
-		if (rknpu_dev->genpd_dev_npu0)
-			pm_runtime_put_sync(rknpu_dev->genpd_dev_npu0);
+	} else {
+		/* Resume failure recovery can leave our physical references held. */
+		ret = rknpu_devfreq_runtime_suspend(dev);
+		if (ret)
+			return ret;
 	}
 
-#ifndef FPGA_PLATFORM
-	rknpu_devfreq_unlock(rknpu_dev);
-#endif
+	/* The four-bank IOMMU now owns its domain and clock dependencies.
+	 * Its supplier suspend may finish asynchronously, but its own genpd
+	 * links keep every MMU bank accessible until that callback finishes.
+	 */
+	if (rknpu_dev->genpd_dev_npu2)
+		pm_runtime_put_sync(rknpu_dev->genpd_dev_npu2);
+	if (rknpu_dev->genpd_dev_npu1)
+		pm_runtime_put_sync(rknpu_dev->genpd_dev_npu1);
+	if (rknpu_dev->genpd_dev_npu0)
+		pm_runtime_put_sync(rknpu_dev->genpd_dev_npu0);
 
 	clk_bulk_disable_unprepare(rknpu_dev->num_clks, rknpu_dev->clks);
-
 #ifndef FPGA_PLATFORM
 	if (rknpu_dev->vdd)
 		regulator_disable(rknpu_dev->vdd);
-
 	if (rknpu_dev->mem)
 		regulator_disable(rknpu_dev->mem);
 #endif
-
+	rknpu_dev->power_enabled = false;
 	return 0;
 }
 
@@ -1274,12 +1303,8 @@ static int rknpu_get_invalid_core_mask(struct device *dev)
 
 static void rknpu_detach_power_domains(struct rknpu_device *rknpu_dev)
 {
-	if (rknpu_dev->genpd_dev_npu2)
-		dev_pm_domain_detach(rknpu_dev->genpd_dev_npu2, true);
-	if (rknpu_dev->genpd_dev_npu1)
-		dev_pm_domain_detach(rknpu_dev->genpd_dev_npu1, true);
-	if (rknpu_dev->genpd_dev_npu0)
-		dev_pm_domain_detach(rknpu_dev->genpd_dev_npu0, true);
+	dev_pm_domain_detach_list(rknpu_dev->power_domains);
+	rknpu_dev->power_domains = NULL;
 
 	rknpu_dev->genpd_dev_npu2 = NULL;
 	rknpu_dev->genpd_dev_npu1 = NULL;
@@ -1290,41 +1315,25 @@ static void rknpu_detach_power_domains(struct rknpu_device *rknpu_dev)
 static int rknpu_attach_power_domains(struct rknpu_device *rknpu_dev)
 {
 	struct device *dev = rknpu_dev->dev;
-	struct device **domains[] = {
-		&rknpu_dev->genpd_dev_npu0,
-		&rknpu_dev->genpd_dev_npu1,
-		&rknpu_dev->genpd_dev_npu2,
-	};
-	static const char * const names[] = { "npu0", "npu1", "npu2" };
-	struct device *virt_dev;
-	int num_domains, i, ret;
+	int count, ret;
 
-	num_domains = of_count_phandle_with_args(dev->of_node, "power-domains",
-					       "#power-domain-cells");
-	if (num_domains == -ENOENT)
+	count = of_count_phandle_with_args(dev->of_node, "power-domains",
+					  "#power-domain-cells");
+	if (count == -ENOENT || count == 1)
 		return 0;
-	if (num_domains < 0)
-		return dev_err_probe(dev, num_domains, "invalid power-domains\n");
-	/* The platform bus attaches devices with a single domain. */
-	if (num_domains <= 1)
-		return 0;
-	if (rknpu_dev->config->num_irqs < 2 ||
-	    rknpu_dev->config->num_irqs > RKNPU_MAX_CORES)
-		return dev_err_probe(dev, -EINVAL, "invalid multi-domain core count\n");
-	if (num_domains < rknpu_dev->config->num_irqs)
-		return dev_err_probe(dev, -EINVAL, "missing NPU power domains\n");
-
-	for (i = 0; i < rknpu_dev->config->num_irqs; i++) {
-		virt_dev = dev_pm_domain_attach_by_name(dev, names[i]);
-		if (IS_ERR_OR_NULL(virt_dev)) {
-			ret = virt_dev ? PTR_ERR(virt_dev) : -ENODEV;
-			return dev_err_probe(dev, ret,
-					     "failed to attach %s power domain\n",
-					     names[i]);
-		}
-		*domains[i] = virt_dev;
-	}
-
+	if (count < 0)
+		return count;
+	if (count != rknpu_dev->config->num_irqs || count < 2 || count > 3)
+		return -EINVAL;
+	ret = dev_pm_domain_attach_list(dev, NULL, &rknpu_dev->power_domains);
+	if (ret < 0)
+		return dev_err_probe(dev, ret, "failed to attach NPU domains\n");
+	if (ret != count)
+		return -EINVAL;
+	rknpu_dev->genpd_dev_npu0 = rknpu_dev->power_domains->pd_devs[0];
+	rknpu_dev->genpd_dev_npu1 = rknpu_dev->power_domains->pd_devs[1];
+	if (count == 3)
+		rknpu_dev->genpd_dev_npu2 = rknpu_dev->power_domains->pd_devs[2];
 	rknpu_dev->multiple_domains = true;
 	return 0;
 }
@@ -1381,9 +1390,16 @@ static int rknpu_probe(struct platform_device *pdev)
 
 	rknpu_dev->iommu_en = rknpu_is_iommu_enable(dev);
 	if (rknpu_dev->iommu_en) {
+		ret = rknpu_validate_iommu(dev);
+		if (ret)
+			return dev_err_probe(dev, ret, "unsupported multicore IOMMU topology\n");
 		rknpu_dev->iommu_group = iommu_group_get(dev);
 		if (!rknpu_dev->iommu_group)
 			return -EINVAL;
+		ret = devm_add_action_or_reset(dev, rknpu_put_iommu_group,
+					       rknpu_dev->iommu_group);
+		if (ret)
+			return ret;
 	} else {
 		/* Initialize reserved memory resources */
 		ret = of_reserved_mem_device_init(dev);
@@ -1409,6 +1425,8 @@ static int rknpu_probe(struct platform_device *pdev)
 
 #ifndef FPGA_PLATFORM
 	rknpu_dev->vdd = devm_regulator_get_optional(dev, "rknpu");
+	if (rknpu_dev->vdd == ERR_PTR(-ENODEV))
+		rknpu_dev->vdd = devm_regulator_get_optional(dev, "npu");
 	if (IS_ERR(rknpu_dev->vdd)) {
 		if (PTR_ERR(rknpu_dev->vdd) != -ENODEV) {
 			ret = PTR_ERR(rknpu_dev->vdd);
@@ -1440,6 +1458,7 @@ static int rknpu_probe(struct platform_device *pdev)
 	mutex_init(&rknpu_dev->power_lock);
 	mutex_init(&rknpu_dev->reset_lock);
 	mutex_init(&rknpu_dev->domain_lock);
+	mutex_init(&rknpu_dev->freq_lock);
 	for (i = 0; i < config->num_irqs; i++) {
 		INIT_LIST_HEAD(&rknpu_dev->subcore_datas[i].todo_list);
 		init_waitqueue_head(&rknpu_dev->subcore_datas[i].job_done_wq);
@@ -1537,7 +1556,9 @@ static int rknpu_probe(struct platform_device *pdev)
 		goto err_detach_domains;
 
 #ifndef FPGA_PLATFORM
-	rknpu_devfreq_init(rknpu_dev);
+	ret = rknpu_devfreq_init(rknpu_dev);
+	if (ret)
+		goto err_devfreq_remove;
 #endif
 
 	// set default power put delay to 3s
@@ -1574,13 +1595,17 @@ static int rknpu_probe(struct platform_device *pdev)
 	if (rknpu_dev->iommu_en)
 		rknpu_iommu_init_domain(rknpu_dev);
 
-	rknpu_power_off(rknpu_dev);
+	ret = rknpu_power_off(rknpu_dev);
+	if (ret)
+		goto err_remove_wq;
 	atomic_set(&rknpu_dev->power_refcount, 0);
 	atomic_set(&rknpu_dev->cmdline_power_refcount, 0);
 	atomic_set(&rknpu_dev->iommu_domain_refcount, 0);
 
 	rknpu_debugger_init(rknpu_dev);
 	rknpu_init_timer(rknpu_dev);
+	/* DRM is registered earlier; reject its I/O until setup is complete. */
+	WRITE_ONCE(rknpu_dev->ready, true);
 
 	return 0;
 
@@ -1588,14 +1613,19 @@ err_remove_wq:
 	destroy_workqueue(rknpu_dev->power_off_wq);
 
 err_devfreq_remove:
-	rknpu_power_off(rknpu_dev);
+	/* A clock parking failure is fail-closed: leak physical references
+	 * rather than ask firmware to power down an unsafe PVTPLL island.
+	 */
+	if (rknpu_power_off(rknpu_dev))
+		dev_crit(dev, "probe cleanup cannot park NPU; power retained\n");
 #ifndef FPGA_PLATFORM
 	rknpu_devfreq_remove(rknpu_dev);
 #endif
 
 err_detach_domains:
 	pm_runtime_disable(dev);
-	rknpu_detach_power_domains(rknpu_dev);
+	if (!rknpu_dev->power_enabled)
+		rknpu_detach_power_domains(rknpu_dev);
 
 err_remove_drv:
 #ifdef CONFIG_ROCKCHIP_RKNPU_DRM_GEM
@@ -1613,6 +1643,7 @@ static void rknpu_remove(struct platform_device *pdev)
 	struct rknpu_device *rknpu_dev = platform_get_drvdata(pdev);
 	int i = 0;
 
+	WRITE_ONCE(rknpu_dev->ready, false);
 	cancel_delayed_work_sync(&rknpu_dev->power_off_work);
 	destroy_workqueue(rknpu_dev->power_off_wq);
 
@@ -1639,7 +1670,6 @@ static void rknpu_remove(struct platform_device *pdev)
 
 	if (rknpu_dev->iommu_en) {
 		rknpu_iommu_free_domains(rknpu_dev);
-		iommu_group_put(rknpu_dev->iommu_group);
 	}
 
 #ifdef CONFIG_ROCKCHIP_RKNPU_DRM_GEM
@@ -1649,17 +1679,34 @@ static void rknpu_remove(struct platform_device *pdev)
 	misc_deregister(&(rknpu_dev->miscdev));
 #endif
 
+	mutex_lock(&rknpu_dev->power_lock);
+	if (rknpu_power_off(rknpu_dev))
+		dev_crit(&pdev->dev, "remove cannot park NPU; power retained\n");
+	mutex_unlock(&rknpu_dev->power_lock);
 #ifndef FPGA_PLATFORM
 	rknpu_devfreq_remove(rknpu_dev);
 #endif
-
-	mutex_lock(&rknpu_dev->power_lock);
-	if (atomic_read(&rknpu_dev->power_refcount) > 0)
-		rknpu_power_off(rknpu_dev);
-	mutex_unlock(&rknpu_dev->power_lock);
-
 	pm_runtime_disable(&pdev->dev);
-	rknpu_detach_power_domains(rknpu_dev);
+	if (!rknpu_dev->power_enabled)
+		rknpu_detach_power_domains(rknpu_dev);
+}
+
+static bool rknpu_jobs_busy(struct rknpu_device *rknpu)
+{
+	unsigned long flags;
+	bool busy = false;
+	int i;
+
+	spin_lock_irqsave(&rknpu->irq_lock, flags);
+	for (i = 0; i < rknpu->config->num_irqs; i++) {
+		if (rknpu->subcore_datas[i].job ||
+		    !list_empty(&rknpu->subcore_datas[i].todo_list)) {
+			busy = true;
+			break;
+		}
+	}
+	spin_unlock_irqrestore(&rknpu->irq_lock, flags);
+	return busy;
 }
 
 #ifndef FPGA_PLATFORM
@@ -1669,6 +1716,8 @@ static int rknpu_suspend(struct device *dev)
 	struct rknpu_device *rknpu_dev = dev_get_drvdata(dev);
 	int ret;
 
+	if (rknpu_jobs_busy(rknpu_dev))
+		return -EBUSY;
 	ret = rknpu_power_get(rknpu_dev);
 	if (ret)
 		return ret;
@@ -1683,10 +1732,11 @@ static int rknpu_suspend(struct device *dev)
 static int rknpu_resume(struct device *dev)
 {
 	struct rknpu_device *rknpu_dev = dev_get_drvdata(dev);
+	int ret = pm_runtime_force_resume(dev);
 
-	rknpu_power_put_delay(rknpu_dev);
-
-	return pm_runtime_force_resume(dev);
+	if (!ret)
+		rknpu_power_put_delay(rknpu_dev);
+	return ret;
 }
 #endif
 
@@ -1706,9 +1756,33 @@ static const struct dev_pm_ops rknpu_pm_ops = {
 };
 #endif
 
+static void rknpu_shutdown(struct platform_device *pdev)
+{
+	struct rknpu_device *rknpu = platform_get_drvdata(pdev);
+	int i;
+
+	mutex_lock(&rknpu->power_lock);
+	rknpu->shutting_down = true;
+	mutex_unlock(&rknpu->power_lock);
+	cancel_delayed_work_sync(&rknpu->power_off_work);
+	/* Let in-flight jobs finish before releasing their DMA dependencies. */
+	for (i = 0; i < 250 && rknpu_jobs_busy(rknpu); i++)
+		msleep(20);
+	mutex_lock(&rknpu->power_lock);
+	if (rknpu_jobs_busy(rknpu)) {
+		if (rknpu->power_enabled)
+			rknpu_devfreq_runtime_suspend(&pdev->dev);
+		dev_crit(&pdev->dev, "shutdown jobs did not drain; power retained\n");
+	} else if (rknpu_power_off(rknpu)) {
+		dev_crit(&pdev->dev, "shutdown cannot park NPU clock\n");
+	}
+	mutex_unlock(&rknpu->power_lock);
+}
+
 static struct platform_driver rknpu_driver = {
 	.probe = rknpu_probe,
 	.remove = rknpu_remove,
+	.shutdown = rknpu_shutdown,
 	.driver = {
 		.owner = THIS_MODULE,
 		.name = "RKNPU",
