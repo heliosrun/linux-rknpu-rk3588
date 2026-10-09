@@ -27,9 +27,33 @@ in
         loading requested elsewhere in the host configuration.
       '';
     };
+
+    npuClockHz = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = 200000000;
+      description = ''
+        Target NPU compute-clock rate in Hz. Currently locked to
+        200 MHz (the vendor POWER_DOWN_FREQ / safe GPLL bring-up
+        rate): any other value is rejected by the assertion below until
+        the REVIEW.md higher-frequency validation checklist is complete
+        with hardware evidence (board-validated rail voltage, in-driver
+        raise sequencing, park-to-200 on power-down).
+      '';
+    };
   };
 
   config = lib.mkIf cfg.enable {
+    assertions = [
+      {
+        assertion = cfg.npuClockHz == 200000000;
+        message = ''
+          hardware.rknpu.npuClockHz above 200 MHz is rejected: higher NPU
+          rates require completing the REVIEW.md higher-frequency
+          validation checklist with hardware evidence.
+        '';
+      }
+    ];
+
     boot.extraModulePackages = [
       (config.boot.kernelPackages.callPackage ./package.nix { })
     ];

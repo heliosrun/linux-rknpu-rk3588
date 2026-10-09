@@ -12,12 +12,14 @@ on:
       - driver/**
       - nix/**
       - flake.*
+      - scripts/check-clock-policy.sh
       - .github/workflows/nix.yml
   pull_request:
     paths:
       - driver/**
       - nix/**
       - flake.*
+      - scripts/check-clock-policy.sh
       - .github/workflows/nix.yml
 
 concurrency:
@@ -31,6 +33,11 @@ jobs:
     steps:
       - name: Checkout
         uses: useblacksmith/checkout@25227e61ff9dafe400e22fa487b673eac4e4409a # v1
+
+      # Fast policy gate (seconds, no nix needed): the whole tree must
+      # agree on the fixed 200 MHz bring-up rate before any building.
+      - name: Check NPU clock policy
+        run: ./scripts/check-clock-policy.sh
 
       - name: Install nix
         uses: DeterminateSystems/nix-installer-action@3138316df39ed29be04236d7ffc686fa525866aa # v23
