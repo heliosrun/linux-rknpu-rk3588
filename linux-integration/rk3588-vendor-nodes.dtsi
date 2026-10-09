@@ -1,37 +1,85 @@
 /* SPDX-License-Identifier: GPL-2.0
- * Vendor RKNPU node for in-tree builds - add to rk3588-base.dtsi.
- * Mutually exclusive with the rocket nodes (same MMIO): both default
- * to disabled. Unique node names avoid clashing with npu@fdab0000.
- *
- * NON-IOMMU MODE: no iommus property, on purpose. The RK3588 NPU
- * IOMMU is one device with four windows across three cores' clock
- * domains (BSP: six gates); the mainline rockchip-iommu driver
- * bulk-gets exactly two clocks (aclk/iface) and aborts on the
- * windows it cannot gate (observed on hardware: synchronous external
- * abort in rk_iommu_enable_stall). Per-window clock support in the
- * mainline driver is the proper fix; until then the vendor driver's
- * own non-iommu mode (physical DMA) is used. */
-	rknpu: rknpu@fdab0000 {
+ * Include after the upstream RK3588 base DTS and board regulator wiring.
+ * Requires rk3588-npu-iommu.patch and the mainline OPP/devfreq build.
+ */
+#include <dt-bindings/clock/rockchip,rk3588-cru.h>
+#include <dt-bindings/reset/rockchip,rk3588-cru.h>
+#include <dt-bindings/power/rk3588-power.h>
+#include <dt-bindings/interrupt-controller/arm-gic.h>
+#include <dt-bindings/interrupt-controller/irq.h>
+#include <dt-bindings/thermal/thermal.h>
+
+/* RK3588 vendor driver with a shared four-bank IOMMU. Requires the
+ * companion rockchip-iommu kernel patch; its dedicated compatible prevents
+ * an unpatched driver from binding to inaccessible banks. Core0 is replaced
+ * in-place to retain each board's existing NPU rail phandle. */
+
+&rknn_core_1 {
+	status = "disabled";
+};
+
+&rknn_core_2 {
+	status = "disabled";
+};
+
+
+&rknn_mmu_1 {
+	status = "disabled";
+};
+
+&rknn_mmu_2 {
+	status = "disabled";
+};
+
+
+&{/} {
+	#address-cells = <2>;
+	#size-cells = <2>;
+
+	iommu@fdab9000 {
+		compatible = "rockchip,rk3588-rknpu-iommu";
+		interrupt-parent = <&gic>;
+		reg = <0x0 0xfdab9000 0x0 0x100>,
+		      <0x0 0xfdaba000 0x0 0x100>,
+		      <0x0 0xfdaca000 0x0 0x100>,
+		      <0x0 0xfdada000 0x0 0x100>;
+		interrupts = <GIC_SPI 110 IRQ_TYPE_LEVEL_HIGH 0>,
+			     <GIC_SPI 111 IRQ_TYPE_LEVEL_HIGH 0>,
+			     <GIC_SPI 112 IRQ_TYPE_LEVEL_HIGH 0>;
+		clocks = <&cru ACLK_NPU0>, <&cru HCLK_NPU0>,
+			 <&cru ACLK_NPU1>, <&cru HCLK_NPU1>,
+			 <&cru ACLK_NPU2>, <&cru HCLK_NPU2>;
+		clock-names = "aclk0", "iface0", "aclk1", "iface1", "aclk2", "iface2";
+		power-domains = <&power RK3588_PD_NPUTOP>,
+				<&power RK3588_PD_NPU1>, <&power RK3588_PD_NPU2>;
+		power-domain-names = "npu0", "npu1", "npu2";
+		status = "okay";
+	};
+
+	npu@fdab0000 {
 		compatible = "rockchip,rk3588-rknpu";
-		reg = <0x0 0xfdab0000 0x0 0x10000>,
-		      <0x0 0xfdac0000 0x0 0x10000>,
-		      <0x0 0xfdad0000 0x0 0x10000>;
+		reg = <0x0 0xfdab0000 0x0 0x9000>,
+		      <0x0 0xfdac0000 0x0 0x9000>,
+		      <0x0 0xfdad0000 0x0 0x9000>;
+		reg-names = "core0", "core1", "core2";
+		interrupt-parent = <&gic>;
 		interrupts = <GIC_SPI 110 IRQ_TYPE_LEVEL_HIGH 0>,
 			     <GIC_SPI 111 IRQ_TYPE_LEVEL_HIGH 0>,
 			     <GIC_SPI 112 IRQ_TYPE_LEVEL_HIGH 0>;
 		interrupt-names = "npu0_irq", "npu1_irq", "npu2_irq";
 		clocks = <&scmi_clk SCMI_CLK_NPU>, <&cru ACLK_NPU0>,
 			 <&cru ACLK_NPU1>, <&cru ACLK_NPU2>,
-			 <&cru HCLK_NPU0>, <&cru HCLK_NPU1>,
-			 <&cru HCLK_NPU2>, <&cru PCLK_NPU_ROOT>;
-		clock-names = "clk_npu", "aclk0",
-			      "aclk1", "aclk2",
-			      "hclk0", "hclk1",
-			      "hclk2", "pclk";
+			 <&cru HCLK_NPU0>, <&cru HCLK_NPU1>, <&cru HCLK_NPU2>,
+			 <&cru PCLK_NPU_ROOT>, <&cru PCLK_NPU_GRF>,
+			 <&cru PCLK_NPU_PVTM>, <&cru CLK_NPU_PVTM>,
+			 <&cru CLK_CORE_NPU_PVTM>, <&cru HCLK_NPU_ROOT>;
+		clock-names = "clk_npu", "aclk0", "aclk1", "aclk2",
+			      "hclk0", "hclk1", "hclk2", "pclk", "pclk_grf",
+			      "pclk_pvtm", "clk_pvtm", "clk_core_pvtm", "hclk_root";
 		assigned-clocks = <&scmi_clk SCMI_CLK_NPU>;
-		/* Defaults run before power-up: only the 200 MHz GPLL path
-		 * is safe here. Higher rates need driver-managed sequencing. */
-		assigned-clock-rates = <200000000>;
+		/* Skip early SCMI access, including rebind. The powered driver parks
+		 * at 200 MHz, then selects the maximum allowed OPP through devfreq. */
+		assigned-clock-rates = <0>;
 		resets = <&cru SRST_A_RKNN0>, <&cru SRST_A_RKNN1>,
 			 <&cru SRST_A_RKNN2>,
 			 <&cru SRST_H_RKNN0>, <&cru SRST_H_RKNN1>,
@@ -42,5 +90,43 @@
 				<&power RK3588_PD_NPU1>,
 				<&power RK3588_PD_NPU2>;
 		power-domain-names = "npu0", "npu1", "npu2";
-		status = "disabled";
+		iommus = <&rknn_mmu_0>;
+		operating-points-v2 = <&rknpu_opp>;
+		#cooling-cells = <2>;
+		status = "okay";
 	};
+
+	rknpu_opp: opp-table-rknpu {
+		compatible = "operating-points-v2";
+		/* Conservative OPi reference voltages; CM3588 caps the rail at
+		 * 950 mV. Regulator constraints filter unsupported board points.
+		 * These are not silicon-bin calibrated BSP voltage tables. */
+		opp-200000000 { opp-hz = /bits/ 64 <200000000>; opp-microvolt = <800000>; };
+		opp-300000000 { opp-hz = /bits/ 64 <300000000>; opp-microvolt = <800000>; };
+		opp-400000000 { opp-hz = /bits/ 64 <400000000>; opp-microvolt = <800000>; };
+		opp-500000000 { opp-hz = /bits/ 64 <500000000>; opp-microvolt = <825000>; };
+		opp-600000000 { opp-hz = /bits/ 64 <600000000>; opp-microvolt = <850000>; };
+		opp-700000000 { opp-hz = /bits/ 64 <700000000>; opp-microvolt = <875000>; };
+		opp-800000000 { opp-hz = /bits/ 64 <800000000>; opp-microvolt = <900000>; };
+		opp-900000000 { opp-hz = /bits/ 64 <900000000>; opp-microvolt = <925000>; };
+		opp-1000000000 { opp-hz = /bits/ 64 <1000000000>; opp-microvolt = <950000>; };
+	};
+};
+
+&npu_thermal {
+	polling-delay = <1000>;
+	polling-delay-passive = <1000>;
+	trips {
+		rknpu_throttle: npu-throttle {
+			temperature = <85000>;
+			hysteresis = <5000>;
+			type = "passive";
+		};
+	};
+	cooling-maps {
+		map-rknpu {
+			trip = <&rknpu_throttle>;
+			cooling-device = <&rknn_core_0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+	};
+};

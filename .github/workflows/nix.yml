@@ -10,12 +10,18 @@ on:
     branches: [ main ]
     paths:
       - driver/**
+      - linux-integration/rk3588-npu-iommu.patch
+      - scripts/check-applied-dt.py
+      - scripts/test-dt-check.py
       - nix/**
       - flake.*
       - .github/workflows/nix.yml
   pull_request:
     paths:
       - driver/**
+      - linux-integration/rk3588-npu-iommu.patch
+      - scripts/check-applied-dt.py
+      - scripts/test-dt-check.py
       - nix/**
       - flake.*
       - .github/workflows/nix.yml

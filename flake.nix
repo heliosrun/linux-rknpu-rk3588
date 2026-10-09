@@ -10,10 +10,16 @@
       # aarch64-linux only: the driver is RK35xx-specific.
       system = "aarch64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
+      kernel = pkgs.linuxPackages_latest.kernel.override (args: {
+        kernelPatches = (args.kernelPatches or [ ]) ++ [
+          (import ./nix/kernel-patch.nix { inherit (pkgs) lib; })
+        ];
+      });
+      kernelPackages = pkgs.linuxPackagesFor kernel;
     in
     {
       packages.${system} = {
-        rknpu = pkgs.linuxPackages_latest.callPackage ./nix/package.nix { };
+        rknpu = kernelPackages.callPackage ./nix/package.nix { };
 
         # Bring-up test tools (compile anywhere, run on RK3588 HW only).
         rknpu-test = pkgs.callPackage ./nix/test.nix { };
@@ -26,7 +32,7 @@
       # filter + root-compatible intersection), then asserts node states.
       checks.${system} = {
         device-tree = pkgs.callPackage ./nix/check-dt.nix {
-          kernel = pkgs.linuxPackages_latest.kernel;
+          inherit kernel;
         };
       };
 

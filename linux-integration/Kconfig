@@ -5,6 +5,9 @@ menu "RKNPU"
 config ROCKCHIP_RKNPU
 	tristate "ROCKCHIP_RKNPU"
 	depends on DRM || DMABUF_HEAPS_ROCKCHIP_CMA_HEAP
+	select PM_OPP
+	select PM_DEVFREQ
+	select DEVFREQ_GOV_PERFORMANCE
 	help
 	  rknpu module.
 

@@ -26,7 +26,7 @@ Reviewing the port against its source:
 | nix/               | nix packaging: module derivation, NixOS module, DT overlay    |
 | linux-integration/ | in-tree wiring reference (Kconfig, Makefile, vendor DT nodes) |
 | scripts/           | CI build steps and vendor-diff updater as runnable scripts    |
-| .github/workflows/ | CI: out-of-tree build vs pristine torvalds tag + nix build    |
+| .github/workflows/ | CI: out-of-tree build vs IOMMU-patched torvalds tag + nix build    |
 
 ## What the port changes (vs vendor v0.9.8)
 
@@ -35,17 +35,25 @@ Reviewing the port against its source:
   iommu_map/iommu_map_sg, sg_dma_is_bus_address, raw-pfn
   vmf_insert_mixed, iommu_paging_domain_alloc, inline IOVA cookie
   replication.
-- Vendor soc/rockchip OPP/monitor helpers replaced by stubs
-  (driver/rknpu_soc_compat.h): fixed 200 MHz bring-up, no DVFS.
-  Higher rates require power-domain/voltage sequencing and a return
-  to 200 MHz before power-down; the stubs do not implement that.
-- rknpu_devfreq.o replaced by rknpu_devfreq_stub.o; rknpu_mem.o
-  (DMA_HEAP) and rknpu_mm.o (SRAM) excluded.
-- DT: vendor rknpu@fdab0000 node is mutually exclusive with the
-  mainline rocket (accel) cores (same MMIO). The nix overlay
-  (nix/overlay.dts) disables rocket and its per-core IOMMUs, and
-  creates the vendor node at 200 MHz without an `iommus` property.
-  This uses physical DMA without NPU DMA isolation.
+- Vendor OPP/monitor helpers replaced with mainline OPP/devfreq. The default
+  performance governor selects the highest point supported by the board's
+  regulator and SCMI firmware, up to **1 GHz at 950 mV**. Firmware rate rounding
+  filters unsupported points. Thermal cooling starts at 85 °C.
+- The powered driver parks the shared clock at **200 MHz** before releasing
+  domains or clocks, then restores the workload OPP after power-up. Failed
+  parking retains power and reports an error.
+- A companion `rockchip-iommu` kernel patch supplies six bus clocks and three
+  runtime-PM domain links to one four-bank IOMMU. Every NPU core shares the same
+  DMA page table. This requires rebuilding the consuming kernel.
+- The overlay replaces `rknn_core_0` in place, retaining the board's NPU supply,
+  and disables the other rocket cores and standalone MMUs. Clock assignment
+  is zero (skip early SCMI programming); the driver sets rates while powered.
+- `rknpu_mem.o` (DMA_HEAP) and `rknpu_mm.o` (SRAM) remain excluded.
+
+The voltage table follows the linked Orange Pi implementation with conservative
+voltage margins. It is **not CM3588 hardware validation** or a replacement for
+Rockchip's silicon-bin/read-margin/temperature calibration. See [REVIEW.md](REVIEW.md)
+for source evidence and the remaining cold-boot and lifecycle tests.
 
 ## NixOS
 
@@ -64,7 +72,7 @@ vermagic matches whichever kernel the host uses.
 ## Headless bring-up
 
 For the first boot, set `hardware.rknpu.autoload = false`. This
-installs the module and the 200 MHz overlay without explicitly loading
+installs the patched kernel, module and OPP/IOMMU overlay without explicitly loading
 RKNPU at boot. Ensure the host does not request the module elsewhere.
 Once SSH is available, run as root:
 
@@ -79,12 +87,17 @@ is optional in this DRM/GEM-only build. A voltage query returns
 `ENODEV` when the board's rail is managed by genpd rather than a
 regulator acquired by the driver.
 
-**Do not raise `assigned-clock-rates` above 200 MHz.** Linux applies
-clock defaults before domain attachment and driver probe; programming
-the NPU-local PVTPLL while its island is off can hang secure firmware.
-DT compilation and a successful module load against an old DTB do not
-validate this sequence. See [REVIEW.md](REVIEW.md) for source references
-and the remaining hardware validation requirements.
+**Keep `assigned-clock-rates = <0>`.** The zero tells Linux to skip the early
+rate change; it does not request a zero-Hz clock. Only the powered driver may
+program the NPU-local PVTPLL. Its normal idle, remove and shutdown paths park
+at 200 MHz. An unsafe clock-recovery failure deliberately retains physical
+references and requires recovery rather than continuing power-down.
+
+The powered debugfs reader at `/sys/kernel/debug/rknpu/freq` reports the current
+rate. Writing an exact DT OPP there (or using `RKNPU_SET_FREQ`) sets the standard
+devfreq userspace ceiling; thermal limits can select a lower rate. Normal
+devfreq `max_freq`/`governor` controls are also available. Never read the global
+`clk_summary` to inspect powered-off SCMI islands.
 
 A systemd rollback timer cannot recover a firmware hang. Have UART,
 recovery media, or another independently tested recovery path before
@@ -94,17 +107,33 @@ to its default (`true`) if automatic loading is wanted.
 
 ## Building manually
 
-    make -C <kernel-tree> ARCH=arm64 O=<build-dir> M="$PWD/driver" modules
+```sh
+scripts/build-kernel.sh <kernel-tree> <jobs>
+scripts/build-module.sh <kernel-tree> "$PWD/driver" <jobs>
+scripts/check-dt-overlay.sh <kernel-tree> "$PWD/nix/overlay.dts" <jobs>
+```
 
-Requires a fully built kernel tree (Module.symvers). The nix
-derivation handles this via kernel.dev.
+Set `CROSS_COMPILE=aarch64-linux-gnu-` when building on x86_64. The kernel
+script applies `linux-integration/rk3588-npu-iommu.patch` and enables the
+performance governor and thermal devfreq support. A fully built matching
+kernel (`Module.symvers`) is required for the module link. NixOS and the flake
+build apply the same patch automatically. An unpatched kernel cannot bind the
+new dedicated IOMMU compatible, so the NPU probe defers rather than touching
+unpowered MMU banks.
+
+For an existing built kernel, apply the patch with
+`scripts/apply-kernel-patches.sh <kernel-tree>`, enable PM/devfreq, OPP,
+`DEVFREQ_GOV_PERFORMANCE` and `DEVFREQ_THERMAL`, and rebuild it before linking
+and deploying the module. The DT validator checks the shared IOMMU, board
+supply, OPP voltages and thermal wiring; five regression tests reject unsafe
+DT mutations.
 
 ## Bumping to a future kernel release
 
 1. Bump KERNEL_REF in .github/workflows/build.yml and the nixpkgs pin
    in flake.nix.
 2. Green CI = out-of-tree build + overlay apply verified against that
-   tag. Fix-ups land in driver/rknpu_soc_compat.h (vendor helper drift)
+   tag plus the companion IOMMU patch. Fix-ups land in driver/rknpu_soc_compat.h (vendor helper drift)
    and the Kbuild ccflags (config symbol drift).
 3. For in-tree builds, re-apply linux-integration/ on the new tree and
    refresh the rk3588-base.dtsi node block if the upstream file moved.
